@@ -35,3 +35,15 @@ Villkorsstyrd formatering, dataverifiering, kommentarer, blandad teckenformateri
 och sammanslagningar över flera rader överförs inte av denna rutin.
 Kontrollera rapportens utseende mot Rapportmall i Excel efter import.
 Ändringen eliminerar modulens enda Copy-anrop; hastigheten är inte uppmätt.
+
+## Tidsmätning av knapp 2
+
+Importera den uppdaterade modulen i stället för den gamla. Öppna direktfönstret
+i VBA-editorn med Alt+F11 och Ctrl+G. Kör UppdateraRapporter (knapp 2).
+Tider skrivs för förberedelser, rensning, bildregister, sammanställning,
+varje delområde och slutberäkning, samt en totaltid. Excel-statusfältet
+visar pågående steg och återställs vid avslut eller fel.
+Slutberäkningen inkluderar återaktivering av automatisk beräkning.
+Tiderna mäter verklig förfluten tid; totaltiden inkluderar inte slutdialogen.
+Vid fel finns endast loggen för redan avslutade steg, ingen slutförd totaltid.
+Mätningen är inte en prestandaoptimering och har inte provkörts i Excel här.

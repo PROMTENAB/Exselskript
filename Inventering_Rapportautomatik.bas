@@ -791,11 +791,25 @@ Private Sub RenderReport(ByVal outputSheet As Worksheet, ByVal areaFilter As Str
     End With
 End Sub
 
+Private Sub LoggaTid(ByVal steg As String, ByRef startTid As Double)
+    Dim nu As Double, sekunder As Double
+    nu = Timer
+    sekunder = nu - startTid
+    If sekunder < 0 Then sekunder = sekunder + 86400
+    Debug.Print steg & ": " & Format$(sekunder, "0.00") & " sek"
+    startTid = nu
+End Sub
+
 Public Sub UppdateraRapporter()
     Dim oldCalc As XlCalculation, i As Long, areaSheet As Worksheet, ws As Worksheet
     Dim raw As Worksheet, areas As Object, names As Object, imgCounts As Object, imgFirst As Object
     Dim area As Variant, areaValue As String, name As String, generated As Long
+    Dim stegTid As Double, totalTid As Double
     On Error GoTo Failed
+    stegTid = Timer
+    totalTid = stegTid
+    Debug.Print "----- Rapportuppdatering " & Now & " -----"
+    Application.StatusBar = "Rapporter: förbereder..."
     oldCalc = Application.Calculation
     Application.ScreenUpdating = False
     Application.DisplayAlerts = False
@@ -809,6 +823,8 @@ Public Sub UppdateraRapporter()
             If Not areas.Exists(areaValue) Then areas.Add areaValue, True
         End If
     Next i
+    LoggaTid "Förberedelser", stegTid
+    Application.StatusBar = "Rapporter: rensar gamla rapporter..."
     ' Endast tidigare genererade OMR-flikar tas bort. Använd inte detta prefix för egna flikar.
     For i = ThisWorkbook.Worksheets.Count To 1 Step -1
         Set ws = ThisWorkbook.Worksheets(i)
@@ -824,26 +840,39 @@ Public Sub UppdateraRapporter()
     On Error GoTo Failed
     ws.UsedRange.UnMerge
     ws.Cells.Clear
+    LoggaTid "Rensa gamla rapporter", stegTid
+    Application.StatusBar = "Rapporter: läser bildregister..."
     BuildPhotoLookup imgCounts, imgFirst
+    LoggaTid "Bildregister", stegTid
+    Application.StatusBar = "Rapporter: bygger sammanställning..."
     RenderReport ws, "", imgCounts, imgFirst
+    LoggaTid "Bygga sammanställning", stegTid
     Set names = CreateObject("Scripting.Dictionary")
     For i = 1 To ThisWorkbook.Worksheets.Count
         names(UCase$(ThisWorkbook.Worksheets(i).Name)) = True
     Next i
+    LoggaTid "Förbereda delområden", stegTid
     For Each area In areas.Keys
+        Application.StatusBar = "Rapporter: bygger " & CStr(area) & " (" & (generated + 1) & "/" & areas.Count & ")..."
         name = SafeSheetName(CStr(area), names)
         Set areaSheet = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
         areaSheet.Name = name
         RenderReport areaSheet, CStr(area), imgCounts, imgFirst
         generated = generated + 1
+        LoggaTid "Bygga delområde " & CStr(area), stegTid
     Next area
     Application.ScreenUpdating = True
     Application.DisplayAlerts = True
+    Application.StatusBar = "Rapporter: slutberäknar formler..."
     Application.Calculation = xlCalculationAutomatic
     Application.Calculate
+    LoggaTid "Slutberäkning", stegTid
+    LoggaTid "TOTALT", totalTid
+    Application.StatusBar = False
     MsgBox "Rapporter uppdaterade. Sammanställning + " & generated & " delområdesflikar skapades. Klicka på + för objektspecifika detaljer.", vbInformation
     Exit Sub
 Failed:
+    Application.StatusBar = False
     Application.ScreenUpdating = True
     Application.DisplayAlerts = True
     Application.Calculation = oldCalc
