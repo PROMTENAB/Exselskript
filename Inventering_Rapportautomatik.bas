@@ -1,0 +1,961 @@
+Attribute VB_Name = "Inventering_Rapportautomatik"
+Option Explicit
+
+' INVENTERING | Vectorworks Excel-export -> rapport
+' Importera modulen i Excel VBA (Alt+F11 > Arkiv > Importera fil).
+' Spara arbetsboken som .xlsm. Kör InstalleraKnappar en gång.
+' Ändringar förs INTE tillbaka till Vectorworks av den här modulen.
+' Mängder och sparprocent i befintliga rapportposter följer Rådata automatiskt.
+' Kategorier, nya littera och utfällbara objekt uppdateras med UppdateraRapporter.
+' Rapportmall innehaller alla grundformat och kolumnbredder for genererade rapporter.
+
+Private Const SHEET_RAW As String = "Rådata"
+Private Const SHEET_RULES As String = "Regler"
+Private Const SHEET_PREF As String = "Rapportval"
+Private Const SHEET_IMAGES As String = "Bilder"
+Private Const SHEET_SUM As String = "Sammanställning"
+Private Const GENERATED_PREFIX As String = "OMR - "
+Private Const LIVE_LAST_ROW As Long = 2000
+
+Public Sub InstalleraKnappar()
+    Dim ws As Worksheet, s As Shape, i As Long
+    Set ws = ThisWorkbook.Worksheets(SHEET_PREF)
+    For i = ws.Shapes.Count To 1 Step -1
+        If Left$(ws.Shapes(i).Name, 15) = "InventeringBtn_" Then ws.Shapes(i).Delete
+    Next i
+    Set s = ws.Shapes.AddShape(5, ws.Range("H4").Left, ws.Range("H4").Top, 205, 36)
+    With s
+        .Name = "InventeringBtn_Import"
+        .TextFrame.Characters.Text = "1   Importera från Vectorworks"
+        .OnAction = "ImporteraFranVectorworks"
+        .Fill.ForeColor.RGB = RGB(25, 50, 76)
+        .Line.Visible = 0
+        .TextFrame.Characters.Font.Color = RGB(255, 255, 255)
+    End With
+    Set s = ws.Shapes.AddShape(5, ws.Range("H7").Left, ws.Range("H7").Top, 205, 36)
+    With s
+        .Name = "InventeringBtn_Rapporter"
+        .TextFrame.Characters.Text = "2   Uppdatera rapporter"
+        .OnAction = "UppdateraRapporter"
+        .Fill.ForeColor.RGB = RGB(23, 110, 116)
+        .Line.Visible = 0
+        .TextFrame.Characters.Font.Color = RGB(255, 255, 255)
+    End With
+    Set s = ws.Shapes.AddShape(5, ws.Range("H10").Left, ws.Range("H10").Top, 205, 36)
+    With s
+        .Name = "InventeringBtn_Bilder"
+        .TextFrame.Characters.Text = "Uppdatera bildregister"
+        .OnAction = "UppdateraBildregister"
+        .Fill.ForeColor.RGB = RGB(117, 90, 64)
+        .Line.Visible = 0
+        .TextFrame.Characters.Font.Color = RGB(255, 255, 255)
+    End With
+    ws.Range("H:H").ColumnWidth = 28
+    MsgBox "Tre knappar har skapats i fliken Rapportval.", vbInformation
+End Sub
+
+Private Function LastRowIn(ByVal ws As Worksheet, ByVal col As Long) As Long
+    LastRowIn = ws.Cells(ws.Rows.Count, col).End(xlUp).Row
+End Function
+
+Private Function S(ByVal v As Variant) As String
+    If IsError(v) Or IsNull(v) Or IsEmpty(v) Then
+        S = ""
+    Else
+        S = Trim$(CStr(v))
+    End If
+End Function
+
+Private Function N(ByVal v As Variant) As Double
+    If IsNumeric(v) Then N = CDbl(v) Else N = 0#
+End Function
+
+Private Function IsYes(ByVal value As Variant) As Boolean
+    IsYes = (StrComp(S(value), "Ja", vbTextCompare) = 0)
+End Function
+
+Private Function Excluded(ByVal ws As Worksheet, ByVal rowNo As Long) As Boolean
+    Dim omitLit As String, omitMaterial As String
+    omitLit = S(ThisWorkbook.Worksheets(SHEET_PREF).Range("B6").Value2)
+    omitMaterial = S(ThisWorkbook.Worksheets(SHEET_PREF).Range("B7").Value2)
+    Excluded = False
+    If Len(omitLit) > 0 Then
+        If InStr(1, S(ws.Cells(rowNo, 1).Value2), omitLit, vbTextCompare) > 0 Then Excluded = True
+    End If
+    If Len(omitMaterial) > 0 Then
+        If StrComp(S(ws.Cells(rowNo, 2).Value2), omitMaterial, vbTextCompare) = 0 Then Excluded = True
+    End If
+End Function
+
+Private Function ImagePath(ByVal imageName As String) As String
+    Dim base As String
+    If Len(imageName) = 0 Then Exit Function
+    If InStr(1, imageName, ":") > 0 Or Left$(imageName, 2) = "\\" Then
+        ImagePath = imageName
+        Exit Function
+    End If
+    base = S(ThisWorkbook.Worksheets(SHEET_PREF).Range("B11").Value2)
+    If Len(base) = 0 Then Exit Function
+    If Right$(base, 1) <> "\" And Right$(base, 1) <> "/" Then base = base & "\"
+    ImagePath = base & imageName
+End Function
+
+Private Sub AddImage(ByVal ws As Worksheet, ByVal choices As Object, ByVal rowOut As Long, _
+                     ByVal id As String, ByVal lit As String, ByVal filename As String, ByVal area As String)
+    Dim key As String, path As String
+    key = UCase$(id) & "|" & UCase$(filename)
+    ws.Cells(rowOut, 1).Value = id
+    ws.Cells(rowOut, 2).Value = lit
+    ws.Cells(rowOut, 3).Value = filename
+    path = ImagePath(filename)
+    ws.Cells(rowOut, 4).Value = path
+    If choices.Exists(key) Then
+        ws.Cells(rowOut, 5).Value = choices(key)
+    Else
+        ws.Cells(rowOut, 5).Value = "Ja"
+    End If
+    ws.Cells(rowOut, 7).Value = area
+    If Len(path) > 0 Then
+        ws.Hyperlinks.Add Anchor:=ws.Cells(rowOut, 6), Address:=path, TextToDisplay:="Öppna bild"
+    End If
+End Sub
+
+Public Sub UppdateraBildregister()
+    Dim ws As Worksheet, raw As Worksheet, lastPic As Long, lastData As Long
+    Dim choices As Object, seen As Object, re As Object, matches As Object, m As Object
+    Dim i As Long, outRow As Long, j As Long, id As String, lit As String, area As String
+    Dim fileText As String, fileName As String, key As String, parts As Variant
+    On Error GoTo Failed
+    Application.ScreenUpdating = False
+    Set ws = ThisWorkbook.Worksheets(SHEET_IMAGES)
+    Set raw = ThisWorkbook.Worksheets(SHEET_RAW)
+    Set choices = CreateObject("Scripting.Dictionary")
+    Set seen = CreateObject("Scripting.Dictionary")
+    lastPic = LastRowIn(ws, 1)
+    For i = 2 To lastPic
+        key = UCase$(S(ws.Cells(i, 1).Value2)) & "|" & UCase$(S(ws.Cells(i, 3).Value2))
+        If Len(S(ws.Cells(i, 3).Value2)) > 0 Then choices(key) = S(ws.Cells(i, 5).Value2)
+    Next i
+    ws.Range("A2:H" & Application.Max(LastRowIn(ws, 1), 2)).ClearContents
+    ws.Hyperlinks.Delete
+    Set re = CreateObject("VBScript.RegExp")
+    re.Pattern = "FOTO\s*\(([^)]*)\)"
+    re.Global = True
+    re.IgnoreCase = True
+    outRow = 2
+    lastData = LastRowIn(raw, 1)
+    For i = 2 To lastData
+        id = S(raw.Cells(i, 8).Value2)
+        lit = S(raw.Cells(i, 1).Value2)
+        area = S(raw.Cells(i, 3).Value2)
+        fileText = S(raw.Cells(i, 7).Value2)
+        If Len(fileText) > 0 And Len(id) > 0 Then
+            Set matches = re.Execute(fileText)
+            If matches.Count > 0 Then
+                For Each m In matches
+                    fileName = Trim$(CStr(m.SubMatches(0)))
+                    key = UCase$(id) & "|" & UCase$(fileName)
+                    If Len(fileName) > 0 And Not seen.Exists(key) Then
+                        seen.Add key, True
+                        AddImage ws, choices, outRow, id, lit, fileName, area
+                        outRow = outRow + 1
+                    End If
+                Next m
+            Else
+                parts = Split(fileText, ",")
+                For j = LBound(parts) To UBound(parts)
+                    fileName = Trim$(CStr(parts(j)))
+                    key = UCase$(id) & "|" & UCase$(fileName)
+                    If Len(fileName) > 0 And Not seen.Exists(key) Then
+                        seen.Add key, True
+                        AddImage ws, choices, outRow, id, lit, fileName, area
+                        outRow = outRow + 1
+                    End If
+                Next j
+            End If
+        End If
+    Next i
+    ws.Columns("A:H").VerticalAlignment = xlCenter
+    ws.Columns("D").ColumnWidth = 52
+    ws.Columns("H").ColumnWidth = 35
+    Application.ScreenUpdating = True
+    MsgBox "Bildregistret uppdaterat: " & (outRow - 2) & " bilder. Dina Ja/Nej-val har bevarats där filnamn och ID matchar.", vbInformation
+    Exit Sub
+Failed:
+    Application.ScreenUpdating = True
+    MsgBox "Fel vid uppdatering av bildregister: " & Err.Description, vbExclamation
+End Sub
+
+Private Function GetRule(ByVal material As String, ByVal className As String, _
+                         ByVal lit As String, ByVal area As String) As Variant
+    Dim ws As Worksheet, r As Long, last As Long, bestRow As Long
+    Dim bestScore As Double, score As Double, fieldVal As String
+    Dim fieldName As String, needle As String, localArea As String
+    Set ws = ThisWorkbook.Worksheets(SHEET_RULES)
+    last = LastRowIn(ws, 1)
+    bestScore = -1E+30
+    For r = 5 To last
+        If IsYes(ws.Cells(r, 2).Value2) Then
+            fieldName = S(ws.Cells(r, 3).Value2)
+            needle = S(ws.Cells(r, 4).Value2)
+            localArea = S(ws.Cells(r, 5).Value2)
+            If Len(localArea) = 0 Or StrComp(localArea, area, vbTextCompare) = 0 Then
+                Select Case UCase$(fieldName)
+                    Case "MATERIALTYP": fieldVal = material
+                    Case "CLASS": fieldVal = className
+                    Case "LITTRERING": fieldVal = lit
+                    Case Else: fieldVal = ""
+                End Select
+                If Len(needle) = 0 Or InStr(1, fieldVal, needle, vbTextCompare) > 0 Then
+                    score = N(ws.Cells(r, 1).Value2)
+                    If Len(localArea) > 0 Then score = score + 1000000#
+                    If score > bestScore Then bestScore = score: bestRow = r
+                End If
+            End If
+        End If
+    Next r
+    If bestRow = 0 Then
+        GetRule = Array("ÖVRIGT", "OKLASSIFICERAT", "", "Auto", 999)
+    Else
+        GetRule = Array(S(ws.Cells(bestRow, 6).Value2), S(ws.Cells(bestRow, 7).Value2), _
+                        S(ws.Cells(bestRow, 8).Value2), S(ws.Cells(bestRow, 9).Value2), _
+                        N(ws.Cells(bestRow, 10).Value2))
+    End If
+End Function
+
+Private Function DetectUnit(ByVal ws As Worksheet, ByVal i As Long, ByVal pref As String) As String
+    pref = LCase$(S(pref))
+    If pref = "m²" Or pref = "lpm" Or pref = "antal" Then
+        DetectUnit = pref: Exit Function
+    End If
+    If N(ws.Cells(i, 11).Value2) <> 0 Then
+        DetectUnit = "lpm"
+    ElseIf N(ws.Cells(i, 10).Value2) <> 0 Then
+        DetectUnit = "m²"
+    Else
+        DetectUnit = "antal"
+    End If
+End Function
+
+Private Function GetReportOption(ByVal area As String) As Variant
+    Dim ws As Worksheet, i As Long, last As Long, target As String, found As Long
+    Set ws = ThisWorkbook.Worksheets(SHEET_PREF)
+    last = LastRowIn(ws, 1)
+    If Len(area) = 0 Then target = "ALLA DELOMRÅDEN" Else target = "STANDARD DELOMRÅDE"
+    For i = 21 To last
+        If StrComp(S(ws.Cells(i, 1).Value2), target, vbTextCompare) = 0 Then found = i
+    Next i
+    If Len(area) > 0 Then
+        For i = 21 To last
+            If StrComp(S(ws.Cells(i, 1).Value2), area, vbTextCompare) = 0 Then found = i
+        Next i
+    End If
+    If found = 0 Then
+        GetReportOption = Array(3, False, False, True)
+    Else
+        GetReportOption = Array(Application.Max(1, Application.Min(3, CLng(N(ws.Cells(found, 2).Value2)))), _
+               IsYes(ws.Cells(found, 3).Value2), IsYes(ws.Cells(found, 4).Value2), IsYes(ws.Cells(found, 5).Value2))
+    End If
+End Function
+
+Private Function SafeSheetName(ByVal area As String, ByVal taken As Object) As String
+    Dim invalid As Variant, ch As Variant, root As String, tryName As String, num As Long, suffix As String
+    invalid = Array("/", "\", "?", "*", "[", "]", ":")
+    root = Trim$(area)
+    If Len(root) = 0 Then root = "Utan delområde"
+    For Each ch In invalid: root = Replace(root, CStr(ch), "_"): Next ch
+    root = GENERATED_PREFIX & root
+    root = Left$(root, 31)
+    tryName = root
+    num = 1
+    Do While taken.Exists(UCase$(tryName))
+        num = num + 1
+        suffix = "_" & CStr(num)
+        tryName = Left$(root, 31 - Len(suffix)) & suffix
+    Loop
+    taken(UCase$(tryName)) = True
+    SafeSheetName = tryName
+End Function
+
+' Gemensam design styrs helt fran de formaterade exempelraderna i Rapportmall.
+' Redigera rad 1/2/4/6/8/10/12/14 och kolumnbredder A:L i mallen.
+Private Sub CopyTemplateRow(ByVal dest As Worksheet, ByVal outRow As Long, ByVal templateRow As Long)
+    Dim tmpl As Worksheet, source As Range, target As Range
+    Dim sc As Range, tc As Range, merged As Range
+    Dim c As Long, edge As Variant
+    Set tmpl = ThisWorkbook.Worksheets("Rapportmall")
+    Set source = tmpl.Range("A" & templateRow & ":L" & templateRow)
+    Set target = dest.Range("A" & outRow & ":L" & outRow)
+    ' Skriv innehåll och format direkt: använd inte Windows Urklipp.
+    target.UnMerge
+    target.FormulaR1C1 = source.FormulaR1C1
+    For c = 1 To 12
+        Set sc = source.Cells(1, c)
+        Set tc = target.Cells(1, c)
+        tc.Style = sc.Style
+        tc.NumberFormat = sc.NumberFormat
+        tc.HorizontalAlignment = sc.HorizontalAlignment
+        tc.VerticalAlignment = sc.VerticalAlignment
+        tc.WrapText = sc.WrapText
+        tc.Orientation = sc.Orientation
+        tc.IndentLevel = sc.IndentLevel
+        tc.ShrinkToFit = sc.ShrinkToFit
+        tc.Locked = sc.Locked
+        tc.FormulaHidden = sc.FormulaHidden
+        With tc.Font
+            .Name = sc.Font.Name
+            .Size = sc.Font.Size
+            .Bold = sc.Font.Bold
+            .Italic = sc.Font.Italic
+            .Underline = sc.Font.Underline
+            .Strikethrough = sc.Font.Strikethrough
+            .Color = sc.Font.Color
+        End With
+        With tc.Interior
+            .Color = sc.Interior.Color
+            .PatternColor = sc.Interior.PatternColor
+            .Pattern = sc.Interior.Pattern
+        End With
+        For Each edge In Array(xlEdgeLeft, xlEdgeTop, xlEdgeBottom, xlEdgeRight, xlDiagonalDown, xlDiagonalUp)
+            With tc.Borders(edge)
+                If sc.Borders(edge).LineStyle = xlLineStyleNone Then
+                    .LineStyle = xlLineStyleNone
+                Else
+                    .Weight = sc.Borders(edge).Weight
+                    .Color = sc.Borders(edge).Color
+                    .LineStyle = sc.Borders(edge).LineStyle
+                End If
+            End With
+        Next edge
+    Next c
+    ' Återskapa mallens sammanslagningar inom den kopierade raden.
+    For c = 1 To 12
+        Set sc = source.Cells(1, c)
+        If sc.MergeCells Then
+            Set merged = sc.MergeArea
+            If merged.Row = templateRow And merged.Column = sc.Column Then
+                If merged.Rows.Count = 1 And merged.Column + merged.Columns.Count - 1 <= 12 Then
+                    dest.Cells(outRow, merged.Column).Resize(1, merged.Columns.Count).Merge
+                End If
+            End If
+        End If
+    Next c
+    dest.Rows(outRow).RowHeight = tmpl.Rows(templateRow).RowHeight
+End Sub
+
+Private Sub PaintTitle(ByVal ws As Worksheet, ByVal area As String)
+    Dim tmpl As Worksheet, c As Long
+    On Error Resume Next
+    Set tmpl = ThisWorkbook.Worksheets("Rapportmall")
+    On Error GoTo 0
+    If tmpl Is Nothing Then Err.Raise vbObjectError + 210, "PaintTitle", "Fliken Rapportmall saknas. Importera den nya Excelmallen innan du kor VBA-modulen."
+    For c = 1 To 12
+        ws.Columns(c).ColumnWidth = tmpl.Columns(c).ColumnWidth
+    Next c
+    CopyTemplateRow ws, 1, 1
+    CopyTemplateRow ws, 2, 2
+    CopyTemplateRow ws, 4, 4
+    If Len(area) = 0 Then
+        ws.Cells(1, 1).Value = "INVENTERING  /  ALLA DELOMRÅDEN"
+    Else
+        ws.Cells(1, 1).Value = "INVENTERING  /  " & UCase$(area)
+    End If
+    ws.Cells(2, 1).Value = "LEVANDE MÄNGDER  ·  Materialinventering / mängder och återbruk"
+    ws.Range("A4:L4").Value = Array("LITTRERING", "MATERIALTYP", "m²", "lpm", "Antal", _
+       "Sparas %", "Sparas mängd", "SKICK", "KOMMENTAR", "BILDER", "DELOMRÅDE", "INFO-ID-REFERENS")
+    ws.Outline.SummaryRow = xlAbove
+    With ws.PageSetup
+        .Orientation = xlLandscape
+        .PaperSize = xlPaperA3
+        .Zoom = False
+        .FitToPagesWide = 1
+        .FitToPagesTall = False
+        .PrintTitleRows = "$1:$4"
+        .LeftMargin = Application.CentimetersToPoints(0.7)
+        .RightMargin = Application.CentimetersToPoints(0.7)
+        .TopMargin = Application.CentimetersToPoints(0.9)
+        .BottomMargin = Application.CentimetersToPoints(0.9)
+        .CenterFooter = "&P / &N"
+    End With
+End Sub
+
+Private Sub CategoryHeading(ByVal ws As Worksheet, ByVal rowNo As Long, _
+                            ByVal title As String, ByVal level As Long)
+    If Len(title) = 0 Then Exit Sub
+    CopyTemplateRow ws, rowNo, 4 + 2 * level
+    ws.Cells(rowNo, 1).Value = UCase$(title)
+End Sub
+
+Private Sub SortKeys(ByRef arr As Variant, ByVal keyStrings As Object, _
+                     ByVal first As Long, ByVal last As Long)
+    Dim i As Long, j As Long, pivot As String, temp As Variant
+    i = first: j = last
+    pivot = CStr(keyStrings(arr((first + last) \ 2)))
+    Do While i <= j
+        Do While StrComp(CStr(keyStrings(arr(i))), pivot, vbTextCompare) < 0: i = i + 1: Loop
+        Do While StrComp(CStr(keyStrings(arr(j))), pivot, vbTextCompare) > 0: j = j - 1: Loop
+        If i <= j Then
+            temp = arr(i): arr(i) = arr(j): arr(j) = temp
+            i = i + 1: j = j - 1
+        End If
+    Loop
+    If first < j Then SortKeys arr, keyStrings, first, j
+    If i < last Then SortKeys arr, keyStrings, i, last
+End Sub
+
+Private Function RoundedQuantity(ByVal nValue As Double, ByVal unit As String) As Double
+    Dim stepValue As Double
+    If unit = "lpm" Then
+        stepValue = N(ThisWorkbook.Worksheets(SHEET_PREF).Range("B13").Value2)
+    ElseIf unit = "m²" Then
+        stepValue = N(ThisWorkbook.Worksheets(SHEET_PREF).Range("B14").Value2)
+    End If
+    If stepValue > 0 Then
+        RoundedQuantity = Int(nValue / stepValue + 0.5) * stepValue
+    Else
+        RoundedQuantity = nValue
+    End If
+End Function
+
+
+' LEVANDE RAPPORTFORMEL: summera utan att VBA behöver köras efter mängdändringar.
+' Rader med samma littera/material och samma ursprungliga CLASS + DELOMRÅDE ingår
+' direkt, även när ytterligare objekt tillkommer. Klassificering och nya grupper
+' uppdateras däremot först vid knapptryckning.
+Private Function XlText(ByVal value As String) As String
+    Dim v As String
+    v = Replace(value, "~", "~~")
+    v = Replace(v, "*", "~*")
+    v = Replace(v, "?", "~?")
+    XlText = Chr$(34) & Replace(v, Chr$(34), Chr$(34) & Chr$(34)) & Chr$(34)
+End Function
+
+Private Function RngRaw(ByVal columnLetter As String) As String
+    RngRaw = "'Rådata'!$" & columnLetter & "$2:$" & columnLetter & "$" & LIVE_LAST_ROW
+End Function
+
+Private Function FindByID(ByVal rawCol As String, ByVal outRow As Long) As String
+    Dim expr As String
+    expr = "INDEX(" & RngRaw(rawCol) & ",MATCH($L" & outRow & "," & RngRaw("H") & ",0))"
+    FindByID = "IFERROR(IF(LEN(" & expr & ")=0,""""," & expr & "),"""")"
+End Function
+
+Private Function GroupCondition(ByVal sourceRow As Long) As String
+    Dim cellRef As String
+    ' Samma källrad som gruppens kommentar/procent; inget ID-uppslag behövs.
+    cellRef = "'Rådata'!$D$" & sourceRow
+    GroupCondition = "IF(LEN(" & cellRef & ")=0,""""," & cellRef & ")"
+End Function
+
+Private Function ExactConditionCriteria(ByVal conditionExpr As String) As String
+    ' COUNTIFS tolkar annars *, ? och inledande jämförelsetecken som villkor.
+    ExactConditionCriteria = """=""&SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(" & _
+        conditionExpr & ",""~"",""~~""),""*"",""~*""),""?"",""~?"")"
+End Function
+
+Private Function GroupTerms(ByVal wsRaw As Worksheet, ByVal rows As Collection, _
+                            ByVal outRow As Long, ByVal metric As String, _
+                            ByVal unit As String, ByVal splitComment As Boolean, _
+                            ByVal splitPercent As Boolean) As String
+    Dim seen As Object, v As Variant, rr As Long, key As String
+    Dim cls As String, area As String, args As String, product As String
+    Dim term As String, result As String, amtCol As String, countArgs As String
+    Dim sourceFirst As Long
+    Set seen = CreateObject("Scripting.Dictionary")
+    sourceFirst = CLng(rows(1))
+    If unit = "lpm" Then
+        amtCol = "K"
+    ElseIf unit = "m²" Then
+        amtCol = "J"
+    Else
+        amtCol = "I"
+    End If
+    For Each v In rows
+        rr = CLng(v)
+        cls = S(wsRaw.Cells(rr, 12).Value2)
+        area = S(wsRaw.Cells(rr, 3).Value2)
+        key = UCase$(cls) & Chr$(30) & UCase$(area)
+        If Not seen.Exists(key) Then
+            seen.Add key, True
+            args = RngRaw("A") & ",$A" & outRow & "," & RngRaw("B") & ",$B" & outRow & _
+                "," & RngRaw("C") & "," & XlText(area) & "," & RngRaw("L") & "," & XlText(cls)
+            product = "--(" & RngRaw("A") & "=$A" & outRow & ")*--(" & RngRaw("B") & "=$B" & outRow & ")" & _
+                "*--(" & RngRaw("C") & "=" & XlText(area) & ")*--(" & RngRaw("L") & "=" & XlText(cls) & ")"
+            If splitComment Then
+                args = args & "," & RngRaw("E") & ",'Rådata'!$E$" & sourceFirst
+                product = product & "*--(" & RngRaw("E") & "='Rådata'!$E$" & sourceFirst & ")"
+            End If
+            If splitPercent Then
+                args = args & "," & RngRaw("F") & ",'Rådata'!$F$" & sourceFirst
+                product = product & "*--(" & RngRaw("F") & "='Rådata'!$F$" & sourceFirst & ")"
+            End If
+            Select Case metric
+                Case "QTY"
+                    term = "SUMIFS(" & RngRaw(amtCol) & "," & args & ")"
+                Case "COUNT"
+                    term = "COUNTIFS(" & args & ")"
+                Case "MISSING"
+                    term = "COUNTIFS(" & args & "," & RngRaw("F") & "," & Chr$(34) & Chr$(34) & ")"
+                Case "SAVED"
+                    term = "SUMPRODUCT(" & product & "*" & RngRaw(amtCol) & "*" & RngRaw("F") & ")"
+                Case "CONDITION"
+                    term = "COUNTIFS(" & args & "," & RngRaw("D") & "," & ExactConditionCriteria(GroupCondition(sourceFirst)) & ")"
+                Case Else
+                    term = "0"
+            End Select
+            If Len(result) > 0 Then result = result & "+"
+            result = result & term
+        End If
+    Next v
+    If Len(result) = 0 Then result = "0"
+    GroupTerms = "(" & result & ")"
+End Function
+
+Private Sub LiveReportGroup(ByVal ws As Worksheet, ByVal wsRaw As Worksheet, _
+                            ByVal headerRow As Long, ByVal rows As Collection, _
+                            ByVal lastDetail As Long, ByVal unit As String, _
+                            ByVal splitComment As Boolean, ByVal splitPercent As Boolean)
+    Dim qty As String, saveQty As String, countAll As String, missing As String
+    Dim sameCondition As String, stepCell As String, rowIx As Long
+    Dim rawFirstID As String, mainCol As Long
+    qty = GroupTerms(wsRaw, rows, headerRow, "QTY", unit, splitComment, splitPercent)
+    saveQty = GroupTerms(wsRaw, rows, headerRow, "SAVED", unit, splitComment, splitPercent)
+    countAll = GroupTerms(wsRaw, rows, headerRow, "COUNT", unit, splitComment, splitPercent)
+    missing = GroupTerms(wsRaw, rows, headerRow, "MISSING", unit, splitComment, splitPercent)
+    sameCondition = GroupTerms(wsRaw, rows, headerRow, "CONDITION", unit, splitComment, splitPercent)
+    rawFirstID = S(wsRaw.Cells(CLng(rows(1)), 8).Value2)
+    If unit = "lpm" Then
+        mainCol = 4
+        stepCell = "'Rapportval'!$B$13"
+    ElseIf unit = "m²" Then
+        mainCol = 3
+        stepCell = "'Rapportval'!$B$14"
+    Else
+        mainCol = 5
+        stepCell = "0"
+    End If
+    ws.Cells(headerRow, mainCol).Formula = "=IF(" & countAll & "=0,"""",IF(" & stepCell & _
+         ">0,ROUND(" & qty & "/" & stepCell & ",0)*" & stepCell & "," & qty & "))"
+    ws.Cells(headerRow, 6).Formula = "=IF(OR(" & qty & "=0," & missing & ">0),""""," & saveQty & "/" & qty & ")"
+    ws.Cells(headerRow, 7).Formula = "=IF(OR(" & qty & "=0," & missing & ">0),"""",IF(" & stepCell & _
+         ">0,ROUND(" & saveQty & "/" & stepCell & ",0)*" & stepCell & "," & saveQty & "))"
+    ' Villkorskolumnen reagerar också om objektens skick ändras.
+    ws.Cells(headerRow, 8).Formula = "=IF(" & countAll & "=0,"""",IF(" & sameCondition & "=" & countAll & _
+          "," & GroupCondition(CLng(rows(1))) & ",""Varierande""))"
+    If rows.Count > 1 Then
+        ws.Cells(headerRow, 9).Formula = "=" & countAll & "&"" objekt · öppna (+)"""
+    Else
+        ws.Cells(headerRow, 9).Formula = "=IF(" & countAll & ">1," & countAll & _
+            "&"" objekt · uppdatera för nya rader""," & FindByID("E", headerRow) & ")"
+    End If
+    If rows.Count = 1 Then
+        ws.Cells(headerRow, 11).Formula = "=" & FindByID("C", headerRow)
+    End If
+    ' Länk till rådata via ID för redan genererade enskilda objektrader.
+    If rows.Count = 1 Then
+        rawFirstID = S(wsRaw.Cells(CLng(rows(1)), 8).Value2)
+        ws.Cells(headerRow, 12).Value = rawFirstID
+        ws.Cells(headerRow, 2).Formula = "=" & FindByID("B", headerRow)
+    Else
+        For rowIx = headerRow + 1 To lastDetail
+            ws.Cells(rowIx, 1).Formula = "=IF(" & FindByID("A", rowIx) & "="""","""",""  » ""&" & FindByID("A", rowIx) & ")"
+            ws.Cells(rowIx, 2).Formula = "=" & FindByID("B", rowIx)
+            ws.Cells(rowIx, 3).Formula = "=" & FindByID("J", rowIx)
+            ws.Cells(rowIx, 4).Formula = "=" & FindByID("K", rowIx)
+            ws.Cells(rowIx, 5).Formula = "=" & FindByID("I", rowIx)
+            ws.Cells(rowIx, 6).Formula = "=" & FindByID("F", rowIx)
+            ws.Cells(rowIx, 7).Formula = "=IF(ISNUMBER(F" & rowIx & "),SUM(C" & rowIx & ":E" & rowIx & ")*F" & rowIx & ","""")"
+            ws.Cells(rowIx, 8).Formula = "=" & FindByID("D", rowIx)
+            ws.Cells(rowIx, 9).Formula = "=" & FindByID("E", rowIx)
+            ws.Cells(rowIx, 11).Formula = "=" & FindByID("C", rowIx)
+        Next rowIx
+    End If
+End Sub
+
+Private Sub PutPhotoLink(ByVal target As Range, ByVal rows As Collection, _
+                         ByVal wsData As Worksheet, ByVal imgCounts As Object, ByVal imgFirst As Object)
+    Dim v As Variant, id As String, count As Long, firstId As String
+    For Each v In rows
+        id = UCase$(S(wsData.Cells(CLng(v), 8).Value2))
+        If imgCounts.Exists(id) Then
+            count = count + CLng(imgCounts(id))
+            If Len(firstId) = 0 Then firstId = id
+        End If
+    Next v
+    If count > 0 Then
+        target.Worksheet.Hyperlinks.Add Anchor:=target, Address:="", _
+           SubAddress:="'" & SHEET_IMAGES & "'!A" & CLng(imgFirst(firstId)), _
+           TextToDisplay:="Bilder (" & count & ")"
+    End If
+End Sub
+
+Private Sub BuildPhotoLookup(ByRef counts As Object, ByRef first As Object)
+    Dim ws As Worksheet, i As Long, id As String
+    Set ws = ThisWorkbook.Worksheets(SHEET_IMAGES)
+    Set counts = CreateObject("Scripting.Dictionary")
+    Set first = CreateObject("Scripting.Dictionary")
+    For i = 2 To LastRowIn(ws, 1)
+        id = UCase$(S(ws.Cells(i, 1).Value2))
+        If Len(id) > 0 And IsYes(ws.Cells(i, 5).Value2) Then
+            If counts.Exists(id) Then
+                counts(id) = CLng(counts(id)) + 1
+            Else
+                counts.Add id, 1
+                first.Add id, i
+            End If
+        End If
+    Next i
+End Sub
+
+Private Sub RenderReport(ByVal outputSheet As Worksheet, ByVal areaFilter As String, _
+                         ByVal imgCounts As Object, ByVal imgFirst As Object)
+    Dim raw As Worksheet, optionRow As Variant, rule As Variant
+    Dim levels As Long, separateComments As Boolean, separatePct As Boolean, showImages As Boolean
+    Dim groups As Object, details As Object, totals As Object, saved As Object, missing As Object
+    Dim meta As Object, sortValues As Object, groupKey As String, unit As String, arr As Variant
+    Dim i As Long, pos As Long, startDetail As Long, lastDetail As Long
+    Dim amount As Double, pct As Double, lit As String, mat As String, area As String
+    Dim valComment As String, condition As String, key As Variant, keys As Variant
+    Dim rows As Collection, detailsRow As Variant, info As Variant
+    Dim l1 As String, l2 As String, l3 As String, prev1 As String, prev2 As String, prev3 As String
+    Dim prevGroup As String, nRecords As Long, rawRow As Long, rawAmount As Double, rawPct As Double
+    Dim rowNo As Long, startRow As Long, sameCondition As Boolean, firstCondition As String, checkRow As Variant
+    Dim singleRow As Collection, summaryRow As Long
+    Set raw = ThisWorkbook.Worksheets(SHEET_RAW)
+    optionRow = GetReportOption(areaFilter)
+    levels = CLng(optionRow(0))
+    separateComments = CBool(optionRow(1))
+    separatePct = CBool(optionRow(2))
+    showImages = CBool(optionRow(3))
+    Set groups = CreateObject("Scripting.Dictionary")
+    Set totals = CreateObject("Scripting.Dictionary")
+    Set saved = CreateObject("Scripting.Dictionary")
+    Set missing = CreateObject("Scripting.Dictionary")
+    Set meta = CreateObject("Scripting.Dictionary")
+    Set sortValues = CreateObject("Scripting.Dictionary")
+    PaintTitle outputSheet, areaFilter
+    For i = 2 To LastRowIn(raw, 1)
+        area = S(raw.Cells(i, 3).Value2)
+        If Len(area) = 0 Then area = "Utan delområde"
+        If Len(areaFilter) = 0 Or StrComp(area, areaFilter, vbTextCompare) = 0 Then
+            If Not Excluded(raw, i) Then
+                lit = S(raw.Cells(i, 1).Value2)
+                mat = S(raw.Cells(i, 2).Value2)
+                condition = S(raw.Cells(i, 4).Value2)
+                valComment = S(raw.Cells(i, 5).Value2)
+                rule = GetRule(mat, S(raw.Cells(i, 12).Value2), lit, area)
+                unit = DetectUnit(raw, i, CStr(rule(3)))
+                Select Case unit
+                    Case "lpm": amount = N(raw.Cells(i, 11).Value2)
+                    Case "m²": amount = N(raw.Cells(i, 10).Value2)
+                    Case Else: amount = N(raw.Cells(i, 9).Value2)
+                End Select
+                groupKey = CStr(rule(0)) & Chr$(30) & CStr(rule(1)) & Chr$(30) & CStr(rule(2)) & Chr$(30) _
+                    & lit & Chr$(30) & mat & Chr$(30) & unit
+                If separateComments Then groupKey = groupKey & Chr$(30) & valComment
+                If separatePct Then groupKey = groupKey & Chr$(30) & S(raw.Cells(i, 6).Value2)
+                If Not groups.Exists(groupKey) Then
+                    Set rows = New Collection
+                    groups.Add groupKey, rows
+                    totals.Add groupKey, 0#
+                    saved.Add groupKey, 0#
+                    missing.Add groupKey, 0&
+                    meta.Add groupKey, Array(CStr(rule(0)), CStr(rule(1)), CStr(rule(2)), lit, mat, unit, condition, area)
+                    sortValues.Add groupKey, Format$(N(rule(4)), "000000") & "|" & UCase$(CStr(rule(0))) & "|" & _
+                       UCase$(CStr(rule(1))) & "|" & UCase$(CStr(rule(2))) & "|" & UCase$(lit) & "|" & _
+                       UCase$(mat) & "|" & UCase$(area) & "|" & groupKey
+                End If
+                Set rows = groups(groupKey)
+                rows.Add i
+                totals(groupKey) = CDbl(totals(groupKey)) + amount
+                If IsNumeric(raw.Cells(i, 6).Value2) And Len(S(raw.Cells(i, 6).Value2)) > 0 Then
+                    pct = CDbl(raw.Cells(i, 6).Value2)
+                    saved(groupKey) = CDbl(saved(groupKey)) + amount * pct
+                Else
+                    missing(groupKey) = CLng(missing(groupKey)) + 1
+                End If
+            End If
+        End If
+    Next i
+    pos = 5
+    If groups.Count = 0 Then
+        outputSheet.Cells(pos, 1).Value = "Inga objekt med de valda kriterierna."
+        Exit Sub
+    End If
+    keys = groups.Keys
+    If groups.Count > 1 Then SortKeys keys, sortValues, LBound(keys), UBound(keys)
+    prev1 = "": prev2 = "": prev3 = ""
+    For Each key In keys
+        info = meta(key)
+        l1 = CStr(info(0)): l2 = CStr(info(1)): l3 = CStr(info(2))
+        If l1 <> prev1 Then
+            CategoryHeading outputSheet, pos, l1, 1: pos = pos + 1
+            prev1 = l1: prev2 = "": prev3 = ""
+        End If
+        If levels >= 2 Then
+            If l2 <> prev2 And Len(l2) > 0 Then
+                CategoryHeading outputSheet, pos, l2, 2: pos = pos + 1
+                prev2 = l2: prev3 = ""
+            End If
+        End If
+        If levels >= 3 Then
+            If l3 <> prev3 And Len(l3) > 0 Then
+                CategoryHeading outputSheet, pos, l3, 3: pos = pos + 1
+                prev3 = l3
+            End If
+        End If
+        Set rows = groups(key)
+        nRecords = rows.Count
+        summaryRow = pos
+        CopyTemplateRow outputSheet, pos, 12
+        outputSheet.Cells(pos, 1).Value = CStr(info(3))
+        outputSheet.Cells(pos, 2).Value = CStr(info(4))
+        firstCondition = S(raw.Cells(CLng(rows(1)), 4).Value2)
+        sameCondition = True
+        For Each checkRow In rows
+            If StrComp(firstCondition, S(raw.Cells(CLng(checkRow), 4).Value2), vbTextCompare) <> 0 Then sameCondition = False
+        Next checkRow
+        If sameCondition Then
+            outputSheet.Cells(pos, 8).Value = firstCondition
+        Else
+            outputSheet.Cells(pos, 8).Value = "Varierande"
+        End If
+        If nRecords = 1 Then
+            rawRow = CLng(rows(1))
+            outputSheet.Cells(pos, 9).Value = S(raw.Cells(rawRow, 5).Value2)
+            outputSheet.Cells(pos, 11).Value = S(raw.Cells(rawRow, 3).Value2)
+            outputSheet.Cells(pos, 12).Value = S(raw.Cells(rawRow, 8).Value2)
+        Else
+            outputSheet.Cells(pos, 9).Value = nRecords & " objekt · se detaljrader (+)"
+            If Len(areaFilter) > 0 Then outputSheet.Cells(pos, 11).Value = areaFilter
+        End If
+        Select Case CStr(info(5))
+            Case "m²": outputSheet.Cells(pos, 3).Value = RoundedQuantity(CDbl(totals(key)), "m²")
+            Case "lpm": outputSheet.Cells(pos, 4).Value = RoundedQuantity(CDbl(totals(key)), "lpm")
+            Case Else: outputSheet.Cells(pos, 5).Value = CDbl(totals(key))
+        End Select
+        If CDbl(totals(key)) > 0 And CLng(missing(key)) = 0 Then
+            outputSheet.Cells(pos, 6).Value = CDbl(saved(key)) / CDbl(totals(key))
+            outputSheet.Cells(pos, 7).Value = RoundedQuantity(CDbl(saved(key)), CStr(info(5)))
+        End If
+        If showImages Then PutPhotoLink outputSheet.Cells(pos, 10), rows, raw, imgCounts, imgFirst
+        If nRecords > 1 Then
+            startDetail = pos + 1
+            For Each detailsRow In rows
+                rawRow = CLng(detailsRow)
+                pos = pos + 1
+                CopyTemplateRow outputSheet, pos, 14
+                rawAmount = 0#
+                Select Case CStr(info(5))
+                    Case "m²"
+                        rawAmount = N(raw.Cells(rawRow, 10).Value2)
+                        outputSheet.Cells(pos, 3).Value = rawAmount
+                    Case "lpm"
+                        rawAmount = N(raw.Cells(rawRow, 11).Value2)
+                        outputSheet.Cells(pos, 4).Value = rawAmount
+                    Case Else
+                        rawAmount = N(raw.Cells(rawRow, 9).Value2)
+                        outputSheet.Cells(pos, 5).Value = rawAmount
+                End Select
+                outputSheet.Cells(pos, 1).Value = "  >> " & S(raw.Cells(rawRow, 1).Value2)
+                outputSheet.Cells(pos, 2).Value = S(raw.Cells(rawRow, 2).Value2)
+                outputSheet.Cells(pos, 8).Value = S(raw.Cells(rawRow, 4).Value2)
+                outputSheet.Cells(pos, 9).Value = S(raw.Cells(rawRow, 5).Value2)
+                outputSheet.Cells(pos, 11).Value = S(raw.Cells(rawRow, 3).Value2)
+                outputSheet.Cells(pos, 12).Value = S(raw.Cells(rawRow, 8).Value2)
+                If IsNumeric(raw.Cells(rawRow, 6).Value2) And Len(S(raw.Cells(rawRow, 6).Value2)) > 0 Then
+                    rawPct = CDbl(raw.Cells(rawRow, 6).Value2)
+                    outputSheet.Cells(pos, 6).Value = rawPct
+                    outputSheet.Cells(pos, 7).Value = rawAmount * rawPct
+                End If
+                If showImages Then
+                    Set singleRow = New Collection
+                    singleRow.Add rawRow
+                    PutPhotoLink outputSheet.Cells(pos, 10), singleRow, raw, imgCounts, imgFirst
+                End If
+            Next detailsRow
+            lastDetail = pos
+            outputSheet.Rows(startDetail & ":" & lastDetail).Group
+            outputSheet.Rows(startDetail & ":" & lastDetail).Hidden = True
+        End If
+        ' Behåll rubriker/gruppstrukturen statisk men beräkna mängder och detaljer direkt från Rådata.
+        LiveReportGroup outputSheet, raw, summaryRow, rows, pos, CStr(info(5)), separateComments, separatePct
+        pos = pos + 1
+    Next key
+    With outputSheet
+        .Range("A4:L" & pos).VerticalAlignment = xlCenter
+        .Range("I5:I" & pos).WrapText = True
+        .Range("F5:F" & pos).NumberFormat = "0%"
+        .Rows("4:4").AutoFilter
+        .PageSetup.PrintArea = "$A$1:$K$" & pos - 1
+    End With
+End Sub
+
+Public Sub UppdateraRapporter()
+    Dim oldCalc As XlCalculation, i As Long, areaSheet As Worksheet, ws As Worksheet
+    Dim raw As Worksheet, areas As Object, names As Object, imgCounts As Object, imgFirst As Object
+    Dim area As Variant, areaValue As String, name As String, generated As Long
+    On Error GoTo Failed
+    oldCalc = Application.Calculation
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+    Application.Calculation = xlCalculationManual
+    Set raw = ThisWorkbook.Worksheets(SHEET_RAW)
+    Set areas = CreateObject("Scripting.Dictionary")
+    For i = 2 To LastRowIn(raw, 1)
+        If Not Excluded(raw, i) Then
+            areaValue = S(raw.Cells(i, 3).Value2)
+            If Len(areaValue) = 0 Then areaValue = "Utan delområde"
+            If Not areas.Exists(areaValue) Then areas.Add areaValue, True
+        End If
+    Next i
+    ' Endast tidigare genererade OMR-flikar tas bort. Använd inte detta prefix för egna flikar.
+    For i = ThisWorkbook.Worksheets.Count To 1 Step -1
+        Set ws = ThisWorkbook.Worksheets(i)
+        If Left$(ws.Name, Len(GENERATED_PREFIX)) = GENERATED_PREFIX Then
+            If Left$(S(ws.Range("A2").Value2), Len("GENERERAD AUTOMATISKT")) = "GENERERAD AUTOMATISKT" _
+               Or Left$(S(ws.Range("A2").Value2), Len("LEVANDE MÄNGDER")) = "LEVANDE MÄNGDER" Then ws.Delete
+        End If
+    Next i
+    Application.DisplayAlerts = True
+    Set ws = ThisWorkbook.Worksheets(SHEET_SUM)
+    On Error Resume Next
+    ws.UsedRange.ClearOutline
+    On Error GoTo Failed
+    ws.UsedRange.UnMerge
+    ws.Cells.Clear
+    BuildPhotoLookup imgCounts, imgFirst
+    RenderReport ws, "", imgCounts, imgFirst
+    Set names = CreateObject("Scripting.Dictionary")
+    For i = 1 To ThisWorkbook.Worksheets.Count
+        names(UCase$(ThisWorkbook.Worksheets(i).Name)) = True
+    Next i
+    For Each area In areas.Keys
+        name = SafeSheetName(CStr(area), names)
+        Set areaSheet = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
+        areaSheet.Name = name
+        RenderReport areaSheet, CStr(area), imgCounts, imgFirst
+        generated = generated + 1
+    Next area
+    Application.ScreenUpdating = True
+    Application.DisplayAlerts = True
+    Application.Calculation = xlCalculationAutomatic
+    Application.Calculate
+    MsgBox "Rapporter uppdaterade. Sammanställning + " & generated & " delområdesflikar skapades. Klicka på + för objektspecifika detaljer.", vbInformation
+    Exit Sub
+Failed:
+    Application.ScreenUpdating = True
+    Application.DisplayAlerts = True
+    Application.Calculation = oldCalc
+    MsgBox "Fel vid rapportgenerering: " & Err.Number & " – " & Err.Description, vbExclamation
+End Sub
+
+Private Function ExportHeadersMatch(ByVal ws As Worksheet) As Boolean
+    ExportHeadersMatch = (StrComp(S(ws.Cells(1, 1).Value2), "LITTRERING", vbTextCompare) = 0 _
+                 And StrComp(S(ws.Cells(1, 8).Value2), "INFO-ID-REFERENS", vbTextCompare) = 0)
+End Function
+
+Public Sub ImporteraFranVectorworks()
+    Dim dialog As FileDialog, srcWB As Workbook, source As Worksheet, candidate As Worksheet, ws As Worksheet
+    Dim ids As Object, visited As Object, rowData As Variant, id As String
+    Dim srcRow As Long, targetRow As Long, srcLast As Long, lastTarget As Long
+    Dim updated As Long, added As Long, missing As Long, duplicate As Long, col As Long
+    Dim keepRatings As Boolean, oldCalc As XlCalculation, lo As ListObject
+    Dim name As String, oldVal As String, existing As Boolean
+    On Error GoTo Failed
+    Set dialog = Application.FileDialog(3)
+    With dialog
+        .Title = "Välj Excel-export från Vectorworks"
+        .Filters.Clear
+        .Filters.Add "Excel-filer", "*.xlsx;*.xlsm;*.xls"
+        .AllowMultiSelect = False
+        If .Show <> -1 Then Exit Sub
+        name = .SelectedItems(1)
+    End With
+    If StrComp(name, ThisWorkbook.FullName, vbTextCompare) = 0 Then
+        MsgBox "Välj exportfilen från Vectorworks, inte själva rapportarbetsboken.", vbExclamation
+        Exit Sub
+    End If
+    oldCalc = Application.Calculation
+    Application.ScreenUpdating = False
+    Application.Calculation = xlCalculationManual
+    Set srcWB = Workbooks.Open(Filename:=name, UpdateLinks:=0, ReadOnly:=True)
+    For Each candidate In srcWB.Worksheets
+        If ExportHeadersMatch(candidate) Then
+            Set source = candidate
+            Exit For
+        End If
+    Next candidate
+    If source Is Nothing Then
+        MsgBox "Hittar inte rådatablad med rubrikerna LITTRERING och INFO-ID-REFERENS i kolumn A respektive H.", vbExclamation
+        GoTo SafeEnd
+    End If
+    Set ws = ThisWorkbook.Worksheets(SHEET_RAW)
+    Set ids = CreateObject("Scripting.Dictionary")
+    Set visited = CreateObject("Scripting.Dictionary")
+    lastTarget = LastRowIn(ws, 1)
+    If StrComp(S(ThisWorkbook.Worksheets(SHEET_PREF).Range("B16").Value2), "Radera", vbTextCompare) = 0 Then
+        ws.Range("A2:L" & Application.Max(2, lastTarget)).ClearContents
+        lastTarget = 1
+        ThisWorkbook.Worksheets(SHEET_PREF).Range("B16").Value = "Raderade"
+    End If
+    For targetRow = 2 To lastTarget
+        id = UCase$(S(ws.Cells(targetRow, 8).Value2))
+        If Len(id) > 0 Then
+            If Not ids.Exists(id) Then ids.Add id, targetRow
+        End If
+    Next targetRow
+    keepRatings = IsYes(ThisWorkbook.Worksheets(SHEET_PREF).Range("B5").Value2)
+    srcLast = LastRowIn(source, 8)
+    For srcRow = 2 To srcLast
+        id = UCase$(S(source.Cells(srcRow, 8).Value2))
+        If Len(id) = 0 Then
+            missing = missing + 1
+        ElseIf visited.Exists(id) Then
+            duplicate = duplicate + 1
+        Else
+            visited.Add id, True
+            existing = ids.Exists(id)
+            If existing Then
+                targetRow = CLng(ids(id))
+                updated = updated + 1
+            Else
+                lastTarget = lastTarget + 1
+                targetRow = lastTarget
+                ids.Add id, targetRow
+                added = added + 1
+            End If
+            For col = 1 To 12
+                If keepRatings And existing And (col = 4 Or col = 5 Or col = 6) And _
+                   Len(S(ws.Cells(targetRow, col).Value2)) > 0 Then
+                    ' Behåll redan ifyllt SKICK, KOMMENTAR och ANDELSPARAS.
+                Else
+                    ws.Cells(targetRow, col).Value2 = source.Cells(srcRow, col).Value2
+                End If
+            Next col
+        End If
+    Next srcRow
+    On Error Resume Next
+    Set lo = ws.ListObjects("tblRadata")
+    If Not lo Is Nothing Then lo.Resize ws.Range("A1:L" & Application.Max(2, lastTarget))
+    On Error GoTo Failed
+    ws.Range("F2:F" & Application.Max(2, lastTarget)).NumberFormat = "0%"
+SafeEnd:
+    If Not srcWB Is Nothing Then srcWB.Close SaveChanges:=False
+    Application.ScreenUpdating = True
+    Application.Calculation = oldCalc
+    If Not source Is Nothing Then
+        UppdateraBildregister
+        UppdateraRapporter
+        MsgBox "Import klar. Uppdaterade: " & updated & ". Nya: " & added & _
+           ". Saknade ID: " & missing & ". Dubbletter i export: " & duplicate & ".", vbInformation
+    End If
+    Exit Sub
+Failed:
+    On Error Resume Next
+    If Not srcWB Is Nothing Then srcWB.Close SaveChanges:=False
+    Application.ScreenUpdating = True
+    Application.Calculation = oldCalc
+    MsgBox "Import misslyckades: " & Err.Description, vbExclamation
+End Sub
+
