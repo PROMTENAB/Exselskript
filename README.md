@@ -47,3 +47,24 @@ Slutberäkningen inkluderar återaktivering av automatisk beräkning.
 Tiderna mäter verklig förfluten tid; totaltiden inkluderar inte slutdialogen.
 Vid fel finns endast loggen för redan avslutade steg, ingen slutförd totaltid.
 Mätningen är inte en prestandaoptimering och har inte provkörts i Excel här.
+
+## Direktlänkar till foton
+
+Rapporten använder inte längre fliken Bilder eller dess Ja/Nej-val. Den gamla
+fliken lämnas orörd. Kör InstalleraKnappar en gång för att ersätta knapparna
+och ta bort den gamla knappen för bildregistret.
+
+Ange fotomappen i Rapportval!B11 och bildnamnen i Rådata kolumn G.
+Format som stöds: FOTO(bild1.jpg) FOTO(bild2.jpg), ett enkelt filnamn eller
+kommaseparerade filnamn. Fullständiga sökvägar används direkt.
+Rapportens befintliga val att visa bilder gäller fortfarande.
+Länken visar första bildnamnet och antal unika bildnamn för raden/gruppen.
+Den öppnar första bilden direkt; övriga bilder öppnas via fotomappen.
+Saknas fotomapp för ett relativt filnamn visas en uppmaning utan klickbar länk.
+Inga bildfiler öppnas eller kontrolleras under rapportgenereringen.
+Kör UppdateraRapporter efter ändring av bildnamn eller fotomapp.
+Tidsloggen visar nu Bildreferenser i stället för Bildregister.
+
+Kontrollera i Excel: ett foto, flera foton, upprepade bildnamn, tomt bildfält,
+saknad fotomapp och fullständig sökväg. Kör även utan fliken Bilder.
+Excel-körning och åtkomst till användarens fotomapp är inte verifierade här.

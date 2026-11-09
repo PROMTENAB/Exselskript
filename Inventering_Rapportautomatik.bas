@@ -12,7 +12,6 @@ Option Explicit
 Private Const SHEET_RAW As String = "Rådata"
 Private Const SHEET_RULES As String = "Regler"
 Private Const SHEET_PREF As String = "Rapportval"
-Private Const SHEET_IMAGES As String = "Bilder"
 Private Const SHEET_SUM As String = "Sammanställning"
 Private Const GENERATED_PREFIX As String = "OMR - "
 Private Const LIVE_LAST_ROW As Long = 2000
@@ -21,7 +20,7 @@ Public Sub InstalleraKnappar()
     Dim ws As Worksheet, s As Shape, i As Long
     Set ws = ThisWorkbook.Worksheets(SHEET_PREF)
     For i = ws.Shapes.Count To 1 Step -1
-        If Left$(ws.Shapes(i).Name, 15) = "InventeringBtn_" Then ws.Shapes(i).Delete
+        If Left$(ws.Shapes(i).Name, Len("InventeringBtn_")) = "InventeringBtn_" Then ws.Shapes(i).Delete
     Next i
     Set s = ws.Shapes.AddShape(5, ws.Range("H4").Left, ws.Range("H4").Top, 205, 36)
     With s
@@ -41,17 +40,8 @@ Public Sub InstalleraKnappar()
         .Line.Visible = 0
         .TextFrame.Characters.Font.Color = RGB(255, 255, 255)
     End With
-    Set s = ws.Shapes.AddShape(5, ws.Range("H10").Left, ws.Range("H10").Top, 205, 36)
-    With s
-        .Name = "InventeringBtn_Bilder"
-        .TextFrame.Characters.Text = "Uppdatera bildregister"
-        .OnAction = "UppdateraBildregister"
-        .Fill.ForeColor.RGB = RGB(117, 90, 64)
-        .Line.Visible = 0
-        .TextFrame.Characters.Font.Color = RGB(255, 255, 255)
-    End With
     ws.Range("H:H").ColumnWidth = 28
-    MsgBox "Tre knappar har skapats i fliken Rapportval.", vbInformation
+    MsgBox "Två knappar har skapats i fliken Rapportval.", vbInformation
 End Sub
 
 Private Function LastRowIn(ByVal ws As Worksheet, ByVal col As Long) As Long
@@ -99,92 +89,6 @@ Private Function ImagePath(ByVal imageName As String) As String
     If Right$(base, 1) <> "\" And Right$(base, 1) <> "/" Then base = base & "\"
     ImagePath = base & imageName
 End Function
-
-Private Sub AddImage(ByVal ws As Worksheet, ByVal choices As Object, ByVal rowOut As Long, _
-                     ByVal id As String, ByVal lit As String, ByVal filename As String, ByVal area As String)
-    Dim key As String, path As String
-    key = UCase$(id) & "|" & UCase$(filename)
-    ws.Cells(rowOut, 1).Value = id
-    ws.Cells(rowOut, 2).Value = lit
-    ws.Cells(rowOut, 3).Value = filename
-    path = ImagePath(filename)
-    ws.Cells(rowOut, 4).Value = path
-    If choices.Exists(key) Then
-        ws.Cells(rowOut, 5).Value = choices(key)
-    Else
-        ws.Cells(rowOut, 5).Value = "Ja"
-    End If
-    ws.Cells(rowOut, 7).Value = area
-    If Len(path) > 0 Then
-        ws.Hyperlinks.Add Anchor:=ws.Cells(rowOut, 6), Address:=path, TextToDisplay:="Öppna bild"
-    End If
-End Sub
-
-Public Sub UppdateraBildregister()
-    Dim ws As Worksheet, raw As Worksheet, lastPic As Long, lastData As Long
-    Dim choices As Object, seen As Object, re As Object, matches As Object, m As Object
-    Dim i As Long, outRow As Long, j As Long, id As String, lit As String, area As String
-    Dim fileText As String, fileName As String, key As String, parts As Variant
-    On Error GoTo Failed
-    Application.ScreenUpdating = False
-    Set ws = ThisWorkbook.Worksheets(SHEET_IMAGES)
-    Set raw = ThisWorkbook.Worksheets(SHEET_RAW)
-    Set choices = CreateObject("Scripting.Dictionary")
-    Set seen = CreateObject("Scripting.Dictionary")
-    lastPic = LastRowIn(ws, 1)
-    For i = 2 To lastPic
-        key = UCase$(S(ws.Cells(i, 1).Value2)) & "|" & UCase$(S(ws.Cells(i, 3).Value2))
-        If Len(S(ws.Cells(i, 3).Value2)) > 0 Then choices(key) = S(ws.Cells(i, 5).Value2)
-    Next i
-    ws.Range("A2:H" & Application.Max(LastRowIn(ws, 1), 2)).ClearContents
-    ws.Hyperlinks.Delete
-    Set re = CreateObject("VBScript.RegExp")
-    re.Pattern = "FOTO\s*\(([^)]*)\)"
-    re.Global = True
-    re.IgnoreCase = True
-    outRow = 2
-    lastData = LastRowIn(raw, 1)
-    For i = 2 To lastData
-        id = S(raw.Cells(i, 8).Value2)
-        lit = S(raw.Cells(i, 1).Value2)
-        area = S(raw.Cells(i, 3).Value2)
-        fileText = S(raw.Cells(i, 7).Value2)
-        If Len(fileText) > 0 And Len(id) > 0 Then
-            Set matches = re.Execute(fileText)
-            If matches.Count > 0 Then
-                For Each m In matches
-                    fileName = Trim$(CStr(m.SubMatches(0)))
-                    key = UCase$(id) & "|" & UCase$(fileName)
-                    If Len(fileName) > 0 And Not seen.Exists(key) Then
-                        seen.Add key, True
-                        AddImage ws, choices, outRow, id, lit, fileName, area
-                        outRow = outRow + 1
-                    End If
-                Next m
-            Else
-                parts = Split(fileText, ",")
-                For j = LBound(parts) To UBound(parts)
-                    fileName = Trim$(CStr(parts(j)))
-                    key = UCase$(id) & "|" & UCase$(fileName)
-                    If Len(fileName) > 0 And Not seen.Exists(key) Then
-                        seen.Add key, True
-                        AddImage ws, choices, outRow, id, lit, fileName, area
-                        outRow = outRow + 1
-                    End If
-                Next j
-            End If
-        End If
-    Next i
-    ws.Columns("A:H").VerticalAlignment = xlCenter
-    ws.Columns("D").ColumnWidth = 52
-    ws.Columns("H").ColumnWidth = 35
-    Application.ScreenUpdating = True
-    MsgBox "Bildregistret uppdaterat: " & (outRow - 2) & " bilder. Dina Ja/Nej-val har bevarats där filnamn och ID matchar.", vbInformation
-    Exit Sub
-Failed:
-    Application.ScreenUpdating = True
-    MsgBox "Fel vid uppdatering av bildregister: " & Err.Description, vbExclamation
-End Sub
 
 Private Function GetRule(ByVal material As String, ByVal className As String, _
                          ByVal lit As String, ByVal area As String) As Variant
@@ -572,43 +476,86 @@ Private Sub LiveReportGroup(ByVal ws As Worksheet, ByVal wsRaw As Worksheet, _
     End If
 End Sub
 
-Private Sub PutPhotoLink(ByVal target As Range, ByVal rows As Collection, _
-                         ByVal wsData As Worksheet, ByVal imgCounts As Object, ByVal imgFirst As Object)
-    Dim v As Variant, id As String, count As Long, firstId As String
-    For Each v In rows
-        id = UCase$(S(wsData.Cells(CLng(v), 8).Value2))
-        If imgCounts.Exists(id) Then
-            count = count + CLng(imgCounts(id))
-            If Len(firstId) = 0 Then firstId = id
-        End If
-    Next v
-    If count > 0 Then
-        target.Worksheet.Hyperlinks.Add Anchor:=target, Address:="", _
-           SubAddress:="'" & SHEET_IMAGES & "'!A" & CLng(imgFirst(firstId)), _
-           TextToDisplay:="Bilder (" & count & ")"
-    End If
-End Sub
-
-Private Sub BuildPhotoLookup(ByRef counts As Object, ByRef first As Object)
-    Dim ws As Worksheet, i As Long, id As String
-    Set ws = ThisWorkbook.Worksheets(SHEET_IMAGES)
-    Set counts = CreateObject("Scripting.Dictionary")
-    Set first = CreateObject("Scripting.Dictionary")
-    For i = 2 To LastRowIn(ws, 1)
-        id = UCase$(S(ws.Cells(i, 1).Value2))
-        If Len(id) > 0 And IsYes(ws.Cells(i, 5).Value2) Then
-            If counts.Exists(id) Then
-                counts(id) = CLng(counts(id)) + 1
-            Else
-                counts.Add id, 1
-                first.Add id, i
+Private Function PhotoNames(ByVal text As String, ByVal re As Object) As Collection
+    Dim result As New Collection, seen As Object, matches As Object
+    Dim m As Object, part As Variant, filename As String
+    Set seen = CreateObject("Scripting.Dictionary")
+    seen.CompareMode = vbTextCompare
+    Set matches = re.Execute(text)
+    If matches.Count > 0 Then
+        For Each m In matches
+            filename = Trim$(CStr(m.SubMatches(0)))
+            If Len(filename) > 0 Then
+                If Not seen.Exists(filename) Then
+                    seen.Add filename, True
+                    result.Add filename
+                End If
             End If
-        End If
+        Next m
+    Else
+        For Each part In Split(text, ",")
+            filename = Trim$(CStr(part))
+            If Len(filename) > 0 Then
+                If Not seen.Exists(filename) Then
+                    seen.Add filename, True
+                    result.Add filename
+                End If
+            End If
+        Next part
+    End If
+    Set PhotoNames = result
+End Function
+
+Private Sub BuildPhotoLookup(ByRef photos As Object)
+    Dim raw As Worksheet, re As Object, names As Collection
+    Dim data As Variant, i As Long, last As Long
+    Set photos = CreateObject("Scripting.Dictionary")
+    Set raw = ThisWorkbook.Worksheets(SHEET_RAW)
+    last = LastRowIn(raw, 1)
+    If last < 2 Then Exit Sub
+    Set re = CreateObject("VBScript.RegExp")
+    re.Pattern = "FOTO\s*\(([^)]*)\)"
+    re.Global = True
+    re.IgnoreCase = True
+    ' Läs en hel kolumn en gång; rad 1 inkluderas så att även ett objekt ger en array.
+    data = raw.Range("G1:G" & last).Value2
+    For i = 2 To last
+        Set names = PhotoNames(S(data(i, 1)), re)
+        If names.Count > 0 Then photos.Add CStr(i), names
     Next i
 End Sub
 
+Private Sub PutPhotoLink(ByVal target As Range, ByVal rows As Collection, _
+                         ByVal photos As Object)
+    Dim v As Variant, filename As Variant, names As Collection
+    Dim seen As Object, firstName As String, path As String, label As String
+    Set seen = CreateObject("Scripting.Dictionary")
+    seen.CompareMode = vbTextCompare
+    For Each v In rows
+        If photos.Exists(CStr(v)) Then
+            Set names = photos(CStr(v))
+            For Each filename In names
+                If Not seen.Exists(CStr(filename)) Then
+                    seen.Add CStr(filename), True
+                    If Len(firstName) = 0 Then firstName = CStr(filename)
+                End If
+            Next filename
+        End If
+    Next v
+    If seen.Count = 0 Then Exit Sub
+    label = firstName & " (" & seen.Count & " bilder)"
+    If seen.Count = 1 Then label = firstName & " (1 bild)"
+    path = ImagePath(firstName)
+    If Len(path) = 0 Then
+        target.Value = label & " - ange fotomapp i Rapportval!B11"
+    Else
+        target.Worksheet.Hyperlinks.Add Anchor:=target, Address:=path, TextToDisplay:=label
+    End If
+End Sub
+
+
 Private Sub RenderReport(ByVal outputSheet As Worksheet, ByVal areaFilter As String, _
-                         ByVal imgCounts As Object, ByVal imgFirst As Object)
+                         ByVal photos As Object)
     Dim raw As Worksheet, optionRow As Variant, rule As Variant
     Dim levels As Long, separateComments As Boolean, separatePct As Boolean, showImages As Boolean
     Dim groups As Object, details As Object, totals As Object, saved As Object, missing As Object
@@ -738,7 +685,7 @@ Private Sub RenderReport(ByVal outputSheet As Worksheet, ByVal areaFilter As Str
             outputSheet.Cells(pos, 6).Value = CDbl(saved(key)) / CDbl(totals(key))
             outputSheet.Cells(pos, 7).Value = RoundedQuantity(CDbl(saved(key)), CStr(info(5)))
         End If
-        If showImages Then PutPhotoLink outputSheet.Cells(pos, 10), rows, raw, imgCounts, imgFirst
+        If showImages Then PutPhotoLink outputSheet.Cells(pos, 10), rows, photos
         If nRecords > 1 Then
             startDetail = pos + 1
             For Each detailsRow In rows
@@ -771,7 +718,7 @@ Private Sub RenderReport(ByVal outputSheet As Worksheet, ByVal areaFilter As Str
                 If showImages Then
                     Set singleRow = New Collection
                     singleRow.Add rawRow
-                    PutPhotoLink outputSheet.Cells(pos, 10), singleRow, raw, imgCounts, imgFirst
+                    PutPhotoLink outputSheet.Cells(pos, 10), singleRow, photos
                 End If
             Next detailsRow
             lastDetail = pos
@@ -802,7 +749,7 @@ End Sub
 
 Public Sub UppdateraRapporter()
     Dim oldCalc As XlCalculation, i As Long, areaSheet As Worksheet, ws As Worksheet
-    Dim raw As Worksheet, areas As Object, names As Object, imgCounts As Object, imgFirst As Object
+    Dim raw As Worksheet, areas As Object, names As Object, photos As Object
     Dim area As Variant, areaValue As String, name As String, generated As Long
     Dim stegTid As Double, totalTid As Double
     On Error GoTo Failed
@@ -841,11 +788,11 @@ Public Sub UppdateraRapporter()
     ws.UsedRange.UnMerge
     ws.Cells.Clear
     LoggaTid "Rensa gamla rapporter", stegTid
-    Application.StatusBar = "Rapporter: läser bildregister..."
-    BuildPhotoLookup imgCounts, imgFirst
-    LoggaTid "Bildregister", stegTid
+    Application.StatusBar = "Rapporter: läser bildnamn från rådata..."
+    BuildPhotoLookup photos
+    LoggaTid "Bildreferenser", stegTid
     Application.StatusBar = "Rapporter: bygger sammanställning..."
-    RenderReport ws, "", imgCounts, imgFirst
+    RenderReport ws, "", photos
     LoggaTid "Bygga sammanställning", stegTid
     Set names = CreateObject("Scripting.Dictionary")
     For i = 1 To ThisWorkbook.Worksheets.Count
@@ -857,7 +804,7 @@ Public Sub UppdateraRapporter()
         name = SafeSheetName(CStr(area), names)
         Set areaSheet = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
         areaSheet.Name = name
-        RenderReport areaSheet, CStr(area), imgCounts, imgFirst
+        RenderReport areaSheet, CStr(area), photos
         generated = generated + 1
         LoggaTid "Bygga delområde " & CStr(area), stegTid
     Next area
@@ -974,7 +921,6 @@ SafeEnd:
     Application.ScreenUpdating = True
     Application.Calculation = oldCalc
     If Not source Is Nothing Then
-        UppdateraBildregister
         UppdateraRapporter
         MsgBox "Import klar. Uppdaterade: " & updated & ". Nya: " & added & _
            ". Saknade ID: " & missing & ". Dubbletter i export: " & duplicate & ".", vbInformation
