@@ -15,6 +15,13 @@ Private Const SHEET_PREF As String = "Rapportval"
 Private Const SHEET_SUM As String = "Sammanställning"
 Private Const GENERATED_PREFIX As String = "OMR - "
 Private Const LIVE_LAST_ROW As Long = 2000
+Private mOutput() As Variant, mFormula() As Boolean, mRowType() As Long
+Private mRaw As Variant, mRules As Variant, mTemplate As Variant
+Private mPhotoJobs As Collection
+Private mRulesByRow As Object, mUnits() As String
+Private mRawLast As Long
+Private mOmitLit As String, mOmitMaterial As String
+Private mTemplateStyles(1 To 14, 1 To 12) As String
 
 Public Sub InstalleraKnappar()
     Dim ws As Worksheet, s As Shape, i As Long
@@ -66,14 +73,14 @@ End Function
 
 Private Function Excluded(ByVal ws As Worksheet, ByVal rowNo As Long) As Boolean
     Dim omitLit As String, omitMaterial As String
-    omitLit = S(ThisWorkbook.Worksheets(SHEET_PREF).Range("B6").Value2)
-    omitMaterial = S(ThisWorkbook.Worksheets(SHEET_PREF).Range("B7").Value2)
+    omitLit = mOmitLit
+    omitMaterial = mOmitMaterial
     Excluded = False
     If Len(omitLit) > 0 Then
-        If InStr(1, S(ws.Cells(rowNo, 1).Value2), omitLit, vbTextCompare) > 0 Then Excluded = True
+        If InStr(1, S(mRaw(rowNo, 1)), omitLit, vbTextCompare) > 0 Then Excluded = True
     End If
     If Len(omitMaterial) > 0 Then
-        If StrComp(S(ws.Cells(rowNo, 2).Value2), omitMaterial, vbTextCompare) = 0 Then Excluded = True
+        If StrComp(S(mRaw(rowNo, 2)), omitMaterial, vbTextCompare) = 0 Then Excluded = True
     End If
 End Function
 
@@ -96,13 +103,13 @@ Private Function GetRule(ByVal material As String, ByVal className As String, _
     Dim bestScore As Double, score As Double, fieldVal As String
     Dim fieldName As String, needle As String, localArea As String
     Set ws = ThisWorkbook.Worksheets(SHEET_RULES)
-    last = LastRowIn(ws, 1)
+    last = UBound(mRules, 1)
     bestScore = -1E+30
     For r = 5 To last
-        If IsYes(ws.Cells(r, 2).Value2) Then
-            fieldName = S(ws.Cells(r, 3).Value2)
-            needle = S(ws.Cells(r, 4).Value2)
-            localArea = S(ws.Cells(r, 5).Value2)
+        If IsYes(mRules(r, 2)) Then
+            fieldName = S(mRules(r, 3))
+            needle = S(mRules(r, 4))
+            localArea = S(mRules(r, 5))
             If Len(localArea) = 0 Or StrComp(localArea, area, vbTextCompare) = 0 Then
                 Select Case UCase$(fieldName)
                     Case "MATERIALTYP": fieldVal = material
@@ -111,7 +118,7 @@ Private Function GetRule(ByVal material As String, ByVal className As String, _
                     Case Else: fieldVal = ""
                 End Select
                 If Len(needle) = 0 Or InStr(1, fieldVal, needle, vbTextCompare) > 0 Then
-                    score = N(ws.Cells(r, 1).Value2)
+                    score = N(mRules(r, 1))
                     If Len(localArea) > 0 Then score = score + 1000000#
                     If score > bestScore Then bestScore = score: bestRow = r
                 End If
@@ -121,9 +128,9 @@ Private Function GetRule(ByVal material As String, ByVal className As String, _
     If bestRow = 0 Then
         GetRule = Array("ÖVRIGT", "OKLASSIFICERAT", "", "Auto", 999)
     Else
-        GetRule = Array(S(ws.Cells(bestRow, 6).Value2), S(ws.Cells(bestRow, 7).Value2), _
-                        S(ws.Cells(bestRow, 8).Value2), S(ws.Cells(bestRow, 9).Value2), _
-                        N(ws.Cells(bestRow, 10).Value2))
+        GetRule = Array(S(mRules(bestRow, 6)), S(mRules(bestRow, 7)), _
+                        S(mRules(bestRow, 8)), S(mRules(bestRow, 9)), _
+                        N(mRules(bestRow, 10)))
     End If
 End Function
 
@@ -132,9 +139,9 @@ Private Function DetectUnit(ByVal ws As Worksheet, ByVal i As Long, ByVal pref A
     If pref = "m²" Or pref = "lpm" Or pref = "antal" Then
         DetectUnit = pref: Exit Function
     End If
-    If N(ws.Cells(i, 11).Value2) <> 0 Then
+    If N(mRaw(i, 11)) <> 0 Then
         DetectUnit = "lpm"
-    ElseIf N(ws.Cells(i, 10).Value2) <> 0 Then
+    ElseIf N(mRaw(i, 10)) <> 0 Then
         DetectUnit = "m²"
     Else
         DetectUnit = "antal"
@@ -183,20 +190,47 @@ End Function
 
 ' Gemensam design styrs helt fran de formaterade exempelraderna i Rapportmall.
 ' Redigera rad 1/2/4/6/8/10/12/14 och kolumnbredder A:L i mallen.
-Private Sub CopyTemplateRow(ByVal dest As Worksheet, ByVal outRow As Long, ByVal templateRow As Long)
-    Dim tmpl As Worksheet, source As Range, target As Range
-    Dim sc As Range, tc As Range, merged As Range
-    Dim c As Long, edge As Variant
+Private Sub PrepareReportData()
+    Dim tmpl As Worksheet, ws As Worksheet, sc As Range, tc As Style
+    Dim t As Variant, c As Long, edge As Variant, styleName As String
+    Dim i As Long, area As String, rule As Variant
+    Set ws = ThisWorkbook.Worksheets(SHEET_RAW)
+    mRawLast = LastRowIn(ws, 1)
+    mRaw = ws.Range("A1:L" & Application.Max(2, mRawLast)).Value2
+    Set ws = ThisWorkbook.Worksheets(SHEET_RULES)
+    mRules = ws.Range("A1:J" & Application.Max(5, LastRowIn(ws, 1))).Value2
+    With ThisWorkbook.Worksheets(SHEET_PREF)
+        mOmitLit = S(.Range("B6").Value2)
+        mOmitMaterial = S(.Range("B7").Value2)
+    End With
+    Set mRulesByRow = CreateObject("Scripting.Dictionary")
+    ReDim mUnits(1 To Application.Max(2, mRawLast))
+    Set ws = ThisWorkbook.Worksheets(SHEET_RAW)
+    For i = 2 To mRawLast
+        area = S(mRaw(i, 3))
+        If Len(area) = 0 Then area = "Utan delområde"
+        rule = GetRule(S(mRaw(i, 2)), S(mRaw(i, 12)), S(mRaw(i, 1)), area)
+        mRulesByRow.Add CStr(i), rule
+        mUnits(i) = DetectUnit(ws, i, CStr(rule(3)))
+    Next i
     Set tmpl = ThisWorkbook.Worksheets("Rapportmall")
-    Set source = tmpl.Range("A" & templateRow & ":L" & templateRow)
-    Set target = dest.Range("A" & outRow & ":L" & outRow)
-    ' Skriv innehåll och format direkt: använd inte Windows Urklipp.
-    target.UnMerge
-    target.FormulaR1C1 = source.FormulaR1C1
-    For c = 1 To 12
-        Set sc = source.Cells(1, c)
-        Set tc = target.Cells(1, c)
-        tc.Style = sc.Style
+    mTemplate = tmpl.Range("A1:L14").FormulaR1C1
+    For Each t In Array(1, 2, 4, 6, 8, 10, 12, 14)
+        For c = 1 To 12
+            Set sc = tmpl.Cells(CLng(t), c)
+            styleName = "Inventering_Auto_" & t & "_" & c
+            Set tc = Nothing
+            On Error Resume Next
+            Set tc = ThisWorkbook.Styles(styleName)
+            On Error GoTo 0
+            If tc Is Nothing Then Set tc = ThisWorkbook.Styles.Add(styleName)
+            mTemplateStyles(CLng(t), c) = styleName
+            tc.IncludeAlignment = True
+            tc.IncludeBorder = True
+            tc.IncludeFont = True
+            tc.IncludeNumber = True
+            tc.IncludePatterns = True
+            tc.IncludeProtection = True
         tc.NumberFormat = sc.NumberFormat
         tc.HorizontalAlignment = sc.HorizontalAlignment
         tc.VerticalAlignment = sc.VerticalAlignment
@@ -231,24 +265,97 @@ Private Sub CopyTemplateRow(ByVal dest As Worksheet, ByVal outRow As Long, ByVal
                 End If
             End With
         Next edge
-    Next c
-    ' Återskapa mallens sammanslagningar inom den kopierade raden.
+        Next c
+    Next t
+End Sub
+
+Private Sub CopyTemplateRow(ByVal dest As Worksheet, ByVal outRow As Long, ByVal templateRow As Long)
+    Dim c As Long, value As Variant
+    mRowType(outRow) = templateRow
     For c = 1 To 12
-        Set sc = source.Cells(1, c)
-        If sc.MergeCells Then
-            Set merged = sc.MergeArea
-            If merged.Row = templateRow And merged.Column = sc.Column Then
-                If merged.Rows.Count = 1 And merged.Column + merged.Columns.Count - 1 <= 12 Then
-                    dest.Cells(outRow, merged.Column).Resize(1, merged.Columns.Count).Merge
-                End If
+        value = mTemplate(templateRow, c)
+        If VarType(value) = vbString Then
+            If Left$(value, 1) = "=" Then
+                value = Application.ConvertFormula(value, xlR1C1, xlA1, xlAbsolute, dest.Cells(outRow, c))
+                mFormula(outRow, c) = True
             End If
         End If
+        mOutput(outRow, c) = value
     Next c
-    dest.Rows(outRow).RowHeight = tmpl.Rows(templateRow).RowHeight
+End Sub
+
+Private Sub ApplyRowFormats(ByVal ws As Worksheet, ByVal selected As Range, ByVal templateRow As Long)
+    Dim c As Long
+    For c = 1 To 12
+        Intersect(selected, ws.Columns(c)).Style = mTemplateStyles(templateRow, c)
+    Next c
+    selected.RowHeight = ThisWorkbook.Worksheets("Rapportmall").Rows(templateRow).RowHeight
+End Sub
+
+Private Sub FlushReport(ByVal ws As Worksheet, ByVal lastRow As Long, ByVal photos As Object)
+    Dim block() As Variant, r As Long, c As Long, t As Variant, batch As Range
+    Dim count As Long, sc As Range, merged As Range, job As Variant, tick As Double
+    Dim tmpl As Worksheet, photoRows As Collection
+    tick = Timer
+    ReDim block(1 To lastRow, 1 To 12)
+    For r = 1 To lastRow
+        For c = 1 To 12
+            block(r, c) = mOutput(r, c)
+            ' Formula-skrivning ska inte tolka littera, ID eller text som formler/tal.
+            If Not mFormula(r, c) And VarType(block(r, c)) = vbString Then
+                If Len(block(r, c)) > 0 Then block(r, c) = "'" & block(r, c)
+            End If
+        Next c
+    Next r
+    ws.Range("A1").Resize(lastRow, 12).Formula = block
+    LoggaTid "  Blockskrivning", tick
+    Set tmpl = ThisWorkbook.Worksheets("Rapportmall")
+    For Each t In Array(1, 2, 4, 6, 8, 10, 12, 14)
+        Set batch = Nothing
+        count = 0
+        For r = 1 To lastRow
+            If mRowType(r) = CLng(t) Then
+                If batch Is Nothing Then
+                    Set batch = ws.Range("A" & r & ":L" & r)
+                Else
+                    Set batch = Application.Union(batch, ws.Range("A" & r & ":L" & r))
+                End If
+                count = count + 1
+                If count = 50 Then
+                    ApplyRowFormats ws, batch, CLng(t)
+                    Set batch = Nothing
+                    count = 0
+                End If
+            End If
+        Next r
+        If Not batch Is Nothing Then ApplyRowFormats ws, batch, CLng(t)
+        For c = 1 To 12
+            Set sc = tmpl.Cells(CLng(t), c)
+            If sc.MergeCells Then
+                Set merged = sc.MergeArea
+                If merged.Row = CLng(t) And merged.Column = c And merged.Rows.Count = 1 _
+                   And c + merged.Columns.Count - 1 <= 12 Then
+                    For r = 1 To lastRow
+                        If mRowType(r) = CLng(t) Then ws.Cells(r, c).Resize(1, merged.Columns.Count).Merge
+                    Next r
+                End If
+            End If
+        Next c
+    Next t
+    LoggaTid "  Formatering", tick
+    For Each job In mPhotoJobs
+        Set photoRows = job(1)
+        PutPhotoLink ws.Cells(CLng(job(0)), 10), photoRows, photos
+    Next job
+    LoggaTid "  Bildlänkar", tick
+End Sub
+
+Private Sub QueuePhoto(ByVal rowNo As Long, ByVal rows As Collection)
+    mPhotoJobs.Add Array(rowNo, rows)
 End Sub
 
 Private Sub PaintTitle(ByVal ws As Worksheet, ByVal area As String)
-    Dim tmpl As Worksheet, c As Long
+    Dim tmpl As Worksheet, c As Long, headers As Variant
     On Error Resume Next
     Set tmpl = ThisWorkbook.Worksheets("Rapportmall")
     On Error GoTo 0
@@ -260,13 +367,17 @@ Private Sub PaintTitle(ByVal ws As Worksheet, ByVal area As String)
     CopyTemplateRow ws, 2, 2
     CopyTemplateRow ws, 4, 4
     If Len(area) = 0 Then
-        ws.Cells(1, 1).Value = "INVENTERING  /  ALLA DELOMRÅDEN"
+        mFormula(1, 1) = False: mOutput(1, 1) = "INVENTERING  /  ALLA DELOMRÅDEN"
     Else
-        ws.Cells(1, 1).Value = "INVENTERING  /  " & UCase$(area)
+        mFormula(1, 1) = False: mOutput(1, 1) = "INVENTERING  /  " & UCase$(area)
     End If
-    ws.Cells(2, 1).Value = "LEVANDE MÄNGDER  ·  Materialinventering / mängder och återbruk"
-    ws.Range("A4:L4").Value = Array("LITTRERING", "MATERIALTYP", "m²", "lpm", "Antal", _
+    mFormula(2, 1) = False: mOutput(2, 1) = "LEVANDE MÄNGDER  ·  Materialinventering / mängder och återbruk"
+    headers = Array("LITTRERING", "MATERIALTYP", "m²", "lpm", "Antal", _
        "Sparas %", "Sparas mängd", "SKICK", "KOMMENTAR", "BILDER", "DELOMRÅDE", "INFO-ID-REFERENS")
+    For c = 1 To 12
+        mOutput(4, c) = headers(c - 1)
+        mFormula(4, c) = False
+    Next c
     ws.Outline.SummaryRow = xlAbove
     With ws.PageSetup
         .Orientation = xlLandscape
@@ -287,7 +398,7 @@ Private Sub CategoryHeading(ByVal ws As Worksheet, ByVal rowNo As Long, _
                             ByVal title As String, ByVal level As Long)
     If Len(title) = 0 Then Exit Sub
     CopyTemplateRow ws, rowNo, 4 + 2 * level
-    ws.Cells(rowNo, 1).Value = UCase$(title)
+    mFormula(rowNo, 1) = False: mOutput(rowNo, 1) = UCase$(title)
 End Sub
 
 Private Sub SortKeys(ByRef arr As Variant, ByVal keyStrings As Object, _
@@ -376,8 +487,8 @@ Private Function GroupTerms(ByVal wsRaw As Worksheet, ByVal rows As Collection, 
     End If
     For Each v In rows
         rr = CLng(v)
-        cls = S(wsRaw.Cells(rr, 12).Value2)
-        area = S(wsRaw.Cells(rr, 3).Value2)
+        cls = S(mRaw(rr, 12))
+        area = S(mRaw(rr, 3))
         key = UCase$(cls) & Chr$(30) & UCase$(area)
         If Not seen.Exists(key) Then
             seen.Add key, True
@@ -427,7 +538,7 @@ Private Sub LiveReportGroup(ByVal ws As Worksheet, ByVal wsRaw As Worksheet, _
     countAll = GroupTerms(wsRaw, rows, headerRow, "COUNT", unit, splitComment, splitPercent)
     missing = GroupTerms(wsRaw, rows, headerRow, "MISSING", unit, splitComment, splitPercent)
     sameCondition = GroupTerms(wsRaw, rows, headerRow, "CONDITION", unit, splitComment, splitPercent)
-    rawFirstID = S(wsRaw.Cells(CLng(rows(1)), 8).Value2)
+    rawFirstID = S(mRaw(CLng(rows(1)), 8))
     If unit = "lpm" Then
         mainCol = 4
         stepCell = "'Rapportval'!$B$13"
@@ -438,40 +549,40 @@ Private Sub LiveReportGroup(ByVal ws As Worksheet, ByVal wsRaw As Worksheet, _
         mainCol = 5
         stepCell = "0"
     End If
-    ws.Cells(headerRow, mainCol).Formula = "=IF(" & countAll & "=0,"""",IF(" & stepCell & _
+    mFormula(headerRow, mainCol) = True: mOutput(headerRow, mainCol) = "=IF(" & countAll & "=0,"""",IF(" & stepCell & _
          ">0,ROUND(" & qty & "/" & stepCell & ",0)*" & stepCell & "," & qty & "))"
-    ws.Cells(headerRow, 6).Formula = "=IF(OR(" & qty & "=0," & missing & ">0),""""," & saveQty & "/" & qty & ")"
-    ws.Cells(headerRow, 7).Formula = "=IF(OR(" & qty & "=0," & missing & ">0),"""",IF(" & stepCell & _
+    mFormula(headerRow, 6) = True: mOutput(headerRow, 6) = "=IF(OR(" & qty & "=0," & missing & ">0),""""," & saveQty & "/" & qty & ")"
+    mFormula(headerRow, 7) = True: mOutput(headerRow, 7) = "=IF(OR(" & qty & "=0," & missing & ">0),"""",IF(" & stepCell & _
          ">0,ROUND(" & saveQty & "/" & stepCell & ",0)*" & stepCell & "," & saveQty & "))"
     ' Villkorskolumnen reagerar också om objektens skick ändras.
-    ws.Cells(headerRow, 8).Formula = "=IF(" & countAll & "=0,"""",IF(" & sameCondition & "=" & countAll & _
+    mFormula(headerRow, 8) = True: mOutput(headerRow, 8) = "=IF(" & countAll & "=0,"""",IF(" & sameCondition & "=" & countAll & _
           "," & GroupCondition(CLng(rows(1))) & ",""Varierande""))"
     If rows.Count > 1 Then
-        ws.Cells(headerRow, 9).Formula = "=" & countAll & "&"" objekt · öppna (+)"""
+        mFormula(headerRow, 9) = True: mOutput(headerRow, 9) = "=" & countAll & "&"" objekt · öppna (+)"""
     Else
-        ws.Cells(headerRow, 9).Formula = "=IF(" & countAll & ">1," & countAll & _
+        mFormula(headerRow, 9) = True: mOutput(headerRow, 9) = "=IF(" & countAll & ">1," & countAll & _
             "&"" objekt · uppdatera för nya rader""," & FindByID("E", headerRow) & ")"
     End If
     If rows.Count = 1 Then
-        ws.Cells(headerRow, 11).Formula = "=" & FindByID("C", headerRow)
+        mFormula(headerRow, 11) = True: mOutput(headerRow, 11) = "=" & FindByID("C", headerRow)
     End If
     ' Länk till rådata via ID för redan genererade enskilda objektrader.
     If rows.Count = 1 Then
-        rawFirstID = S(wsRaw.Cells(CLng(rows(1)), 8).Value2)
-        ws.Cells(headerRow, 12).Value = rawFirstID
-        ws.Cells(headerRow, 2).Formula = "=" & FindByID("B", headerRow)
+        rawFirstID = S(mRaw(CLng(rows(1)), 8))
+        mFormula(headerRow, 12) = False: mOutput(headerRow, 12) = mRaw(CLng(rows(1)), 8)
+        mFormula(headerRow, 2) = True: mOutput(headerRow, 2) = "=" & FindByID("B", headerRow)
     Else
         For rowIx = headerRow + 1 To lastDetail
-            ws.Cells(rowIx, 1).Formula = "=IF(" & FindByID("A", rowIx) & "="""","""",""  » ""&" & FindByID("A", rowIx) & ")"
-            ws.Cells(rowIx, 2).Formula = "=" & FindByID("B", rowIx)
-            ws.Cells(rowIx, 3).Formula = "=" & FindByID("J", rowIx)
-            ws.Cells(rowIx, 4).Formula = "=" & FindByID("K", rowIx)
-            ws.Cells(rowIx, 5).Formula = "=" & FindByID("I", rowIx)
-            ws.Cells(rowIx, 6).Formula = "=" & FindByID("F", rowIx)
-            ws.Cells(rowIx, 7).Formula = "=IF(ISNUMBER(F" & rowIx & "),SUM(C" & rowIx & ":E" & rowIx & ")*F" & rowIx & ","""")"
-            ws.Cells(rowIx, 8).Formula = "=" & FindByID("D", rowIx)
-            ws.Cells(rowIx, 9).Formula = "=" & FindByID("E", rowIx)
-            ws.Cells(rowIx, 11).Formula = "=" & FindByID("C", rowIx)
+            mFormula(rowIx, 1) = True: mOutput(rowIx, 1) = "=IF(" & FindByID("A", rowIx) & "="""","""",""  » ""&" & FindByID("A", rowIx) & ")"
+            mFormula(rowIx, 2) = True: mOutput(rowIx, 2) = "=" & FindByID("B", rowIx)
+            mFormula(rowIx, 3) = True: mOutput(rowIx, 3) = "=" & FindByID("J", rowIx)
+            mFormula(rowIx, 4) = True: mOutput(rowIx, 4) = "=" & FindByID("K", rowIx)
+            mFormula(rowIx, 5) = True: mOutput(rowIx, 5) = "=" & FindByID("I", rowIx)
+            mFormula(rowIx, 6) = True: mOutput(rowIx, 6) = "=" & FindByID("F", rowIx)
+            mFormula(rowIx, 7) = True: mOutput(rowIx, 7) = "=IF(ISNUMBER(F" & rowIx & "),SUM(C" & rowIx & ":E" & rowIx & ")*F" & rowIx & ","""")"
+            mFormula(rowIx, 8) = True: mOutput(rowIx, 8) = "=" & FindByID("D", rowIx)
+            mFormula(rowIx, 9) = True: mOutput(rowIx, 9) = "=" & FindByID("E", rowIx)
+            mFormula(rowIx, 11) = True: mOutput(rowIx, 11) = "=" & FindByID("C", rowIx)
         Next rowIx
     End If
 End Sub
@@ -568,6 +679,12 @@ Private Sub RenderReport(ByVal outputSheet As Worksheet, ByVal areaFilter As Str
     Dim prevGroup As String, nRecords As Long, rawRow As Long, rawAmount As Double, rawPct As Double
     Dim rowNo As Long, startRow As Long, sameCondition As Boolean, firstCondition As String, checkRow As Variant
     Dim singleRow As Collection, summaryRow As Long
+    Dim buildTick As Double
+    buildTick = Timer
+    ReDim mOutput(1 To 5 * Application.Max(2, mRawLast) + 10, 1 To 12)
+    ReDim mFormula(1 To UBound(mOutput, 1), 1 To 12)
+    ReDim mRowType(1 To UBound(mOutput, 1))
+    Set mPhotoJobs = New Collection
     Set raw = ThisWorkbook.Worksheets(SHEET_RAW)
     optionRow = GetReportOption(areaFilter)
     levels = CLng(optionRow(0))
@@ -581,26 +698,26 @@ Private Sub RenderReport(ByVal outputSheet As Worksheet, ByVal areaFilter As Str
     Set meta = CreateObject("Scripting.Dictionary")
     Set sortValues = CreateObject("Scripting.Dictionary")
     PaintTitle outputSheet, areaFilter
-    For i = 2 To LastRowIn(raw, 1)
-        area = S(raw.Cells(i, 3).Value2)
+    For i = 2 To mRawLast
+        area = S(mRaw(i, 3))
         If Len(area) = 0 Then area = "Utan delområde"
         If Len(areaFilter) = 0 Or StrComp(area, areaFilter, vbTextCompare) = 0 Then
             If Not Excluded(raw, i) Then
-                lit = S(raw.Cells(i, 1).Value2)
-                mat = S(raw.Cells(i, 2).Value2)
-                condition = S(raw.Cells(i, 4).Value2)
-                valComment = S(raw.Cells(i, 5).Value2)
-                rule = GetRule(mat, S(raw.Cells(i, 12).Value2), lit, area)
-                unit = DetectUnit(raw, i, CStr(rule(3)))
+                lit = S(mRaw(i, 1))
+                mat = S(mRaw(i, 2))
+                condition = S(mRaw(i, 4))
+                valComment = S(mRaw(i, 5))
+                rule = mRulesByRow(CStr(i))
+                unit = mUnits(i)
                 Select Case unit
-                    Case "lpm": amount = N(raw.Cells(i, 11).Value2)
-                    Case "m²": amount = N(raw.Cells(i, 10).Value2)
-                    Case Else: amount = N(raw.Cells(i, 9).Value2)
+                    Case "lpm": amount = N(mRaw(i, 11))
+                    Case "m²": amount = N(mRaw(i, 10))
+                    Case Else: amount = N(mRaw(i, 9))
                 End Select
                 groupKey = CStr(rule(0)) & Chr$(30) & CStr(rule(1)) & Chr$(30) & CStr(rule(2)) & Chr$(30) _
                     & lit & Chr$(30) & mat & Chr$(30) & unit
                 If separateComments Then groupKey = groupKey & Chr$(30) & valComment
-                If separatePct Then groupKey = groupKey & Chr$(30) & S(raw.Cells(i, 6).Value2)
+                If separatePct Then groupKey = groupKey & Chr$(30) & S(mRaw(i, 6))
                 If Not groups.Exists(groupKey) Then
                     Set rows = New Collection
                     groups.Add groupKey, rows
@@ -615,8 +732,8 @@ Private Sub RenderReport(ByVal outputSheet As Worksheet, ByVal areaFilter As Str
                 Set rows = groups(groupKey)
                 rows.Add i
                 totals(groupKey) = CDbl(totals(groupKey)) + amount
-                If IsNumeric(raw.Cells(i, 6).Value2) And Len(S(raw.Cells(i, 6).Value2)) > 0 Then
-                    pct = CDbl(raw.Cells(i, 6).Value2)
+                If IsNumeric(mRaw(i, 6)) And Len(S(mRaw(i, 6))) > 0 Then
+                    pct = CDbl(mRaw(i, 6))
                     saved(groupKey) = CDbl(saved(groupKey)) + amount * pct
                 Else
                     missing(groupKey) = CLng(missing(groupKey)) + 1
@@ -626,7 +743,8 @@ Private Sub RenderReport(ByVal outputSheet As Worksheet, ByVal areaFilter As Str
     Next i
     pos = 5
     If groups.Count = 0 Then
-        outputSheet.Cells(pos, 1).Value = "Inga objekt med de valda kriterierna."
+        mFormula(pos, 1) = False: mOutput(pos, 1) = "Inga objekt med de valda kriterierna."
+        FlushReport outputSheet, pos, photos
         Exit Sub
     End If
     keys = groups.Keys
@@ -655,37 +773,37 @@ Private Sub RenderReport(ByVal outputSheet As Worksheet, ByVal areaFilter As Str
         nRecords = rows.Count
         summaryRow = pos
         CopyTemplateRow outputSheet, pos, 12
-        outputSheet.Cells(pos, 1).Value = CStr(info(3))
-        outputSheet.Cells(pos, 2).Value = CStr(info(4))
-        firstCondition = S(raw.Cells(CLng(rows(1)), 4).Value2)
+        mFormula(pos, 1) = False: mOutput(pos, 1) = CStr(info(3))
+        mFormula(pos, 2) = False: mOutput(pos, 2) = CStr(info(4))
+        firstCondition = S(mRaw(CLng(rows(1)), 4))
         sameCondition = True
         For Each checkRow In rows
-            If StrComp(firstCondition, S(raw.Cells(CLng(checkRow), 4).Value2), vbTextCompare) <> 0 Then sameCondition = False
+            If StrComp(firstCondition, S(mRaw(CLng(checkRow), 4)), vbTextCompare) <> 0 Then sameCondition = False
         Next checkRow
         If sameCondition Then
-            outputSheet.Cells(pos, 8).Value = firstCondition
+            mFormula(pos, 8) = False: mOutput(pos, 8) = firstCondition
         Else
-            outputSheet.Cells(pos, 8).Value = "Varierande"
+            mFormula(pos, 8) = False: mOutput(pos, 8) = "Varierande"
         End If
         If nRecords = 1 Then
             rawRow = CLng(rows(1))
-            outputSheet.Cells(pos, 9).Value = S(raw.Cells(rawRow, 5).Value2)
-            outputSheet.Cells(pos, 11).Value = S(raw.Cells(rawRow, 3).Value2)
-            outputSheet.Cells(pos, 12).Value = S(raw.Cells(rawRow, 8).Value2)
+            mFormula(pos, 9) = False: mOutput(pos, 9) = S(mRaw(rawRow, 5))
+            mFormula(pos, 11) = False: mOutput(pos, 11) = S(mRaw(rawRow, 3))
+            mFormula(pos, 12) = False: mOutput(pos, 12) = mRaw(rawRow, 8)
         Else
-            outputSheet.Cells(pos, 9).Value = nRecords & " objekt · se detaljrader (+)"
-            If Len(areaFilter) > 0 Then outputSheet.Cells(pos, 11).Value = areaFilter
+            mFormula(pos, 9) = False: mOutput(pos, 9) = nRecords & " objekt · se detaljrader (+)"
+            If Len(areaFilter) > 0 Then mFormula(pos, 11) = False: mOutput(pos, 11) = areaFilter
         End If
         Select Case CStr(info(5))
-            Case "m²": outputSheet.Cells(pos, 3).Value = RoundedQuantity(CDbl(totals(key)), "m²")
-            Case "lpm": outputSheet.Cells(pos, 4).Value = RoundedQuantity(CDbl(totals(key)), "lpm")
-            Case Else: outputSheet.Cells(pos, 5).Value = CDbl(totals(key))
+            Case "m²": mFormula(pos, 3) = False: mOutput(pos, 3) = RoundedQuantity(CDbl(totals(key)), "m²")
+            Case "lpm": mFormula(pos, 4) = False: mOutput(pos, 4) = RoundedQuantity(CDbl(totals(key)), "lpm")
+            Case Else: mFormula(pos, 5) = False: mOutput(pos, 5) = CDbl(totals(key))
         End Select
         If CDbl(totals(key)) > 0 And CLng(missing(key)) = 0 Then
-            outputSheet.Cells(pos, 6).Value = CDbl(saved(key)) / CDbl(totals(key))
-            outputSheet.Cells(pos, 7).Value = RoundedQuantity(CDbl(saved(key)), CStr(info(5)))
+            mFormula(pos, 6) = False: mOutput(pos, 6) = CDbl(saved(key)) / CDbl(totals(key))
+            mFormula(pos, 7) = False: mOutput(pos, 7) = RoundedQuantity(CDbl(saved(key)), CStr(info(5)))
         End If
-        If showImages Then PutPhotoLink outputSheet.Cells(pos, 10), rows, photos
+        If showImages Then QueuePhoto pos, rows
         If nRecords > 1 Then
             startDetail = pos + 1
             For Each detailsRow In rows
@@ -695,30 +813,30 @@ Private Sub RenderReport(ByVal outputSheet As Worksheet, ByVal areaFilter As Str
                 rawAmount = 0#
                 Select Case CStr(info(5))
                     Case "m²"
-                        rawAmount = N(raw.Cells(rawRow, 10).Value2)
-                        outputSheet.Cells(pos, 3).Value = rawAmount
+                        rawAmount = N(mRaw(rawRow, 10))
+                        mFormula(pos, 3) = False: mOutput(pos, 3) = rawAmount
                     Case "lpm"
-                        rawAmount = N(raw.Cells(rawRow, 11).Value2)
-                        outputSheet.Cells(pos, 4).Value = rawAmount
+                        rawAmount = N(mRaw(rawRow, 11))
+                        mFormula(pos, 4) = False: mOutput(pos, 4) = rawAmount
                     Case Else
-                        rawAmount = N(raw.Cells(rawRow, 9).Value2)
-                        outputSheet.Cells(pos, 5).Value = rawAmount
+                        rawAmount = N(mRaw(rawRow, 9))
+                        mFormula(pos, 5) = False: mOutput(pos, 5) = rawAmount
                 End Select
-                outputSheet.Cells(pos, 1).Value = "  >> " & S(raw.Cells(rawRow, 1).Value2)
-                outputSheet.Cells(pos, 2).Value = S(raw.Cells(rawRow, 2).Value2)
-                outputSheet.Cells(pos, 8).Value = S(raw.Cells(rawRow, 4).Value2)
-                outputSheet.Cells(pos, 9).Value = S(raw.Cells(rawRow, 5).Value2)
-                outputSheet.Cells(pos, 11).Value = S(raw.Cells(rawRow, 3).Value2)
-                outputSheet.Cells(pos, 12).Value = S(raw.Cells(rawRow, 8).Value2)
-                If IsNumeric(raw.Cells(rawRow, 6).Value2) And Len(S(raw.Cells(rawRow, 6).Value2)) > 0 Then
-                    rawPct = CDbl(raw.Cells(rawRow, 6).Value2)
-                    outputSheet.Cells(pos, 6).Value = rawPct
-                    outputSheet.Cells(pos, 7).Value = rawAmount * rawPct
+                mFormula(pos, 1) = False: mOutput(pos, 1) = "  >> " & S(mRaw(rawRow, 1))
+                mFormula(pos, 2) = False: mOutput(pos, 2) = S(mRaw(rawRow, 2))
+                mFormula(pos, 8) = False: mOutput(pos, 8) = S(mRaw(rawRow, 4))
+                mFormula(pos, 9) = False: mOutput(pos, 9) = S(mRaw(rawRow, 5))
+                mFormula(pos, 11) = False: mOutput(pos, 11) = S(mRaw(rawRow, 3))
+                mFormula(pos, 12) = False: mOutput(pos, 12) = mRaw(rawRow, 8)
+                If IsNumeric(mRaw(rawRow, 6)) And Len(S(mRaw(rawRow, 6))) > 0 Then
+                    rawPct = CDbl(mRaw(rawRow, 6))
+                    mFormula(pos, 6) = False: mOutput(pos, 6) = rawPct
+                    mFormula(pos, 7) = False: mOutput(pos, 7) = rawAmount * rawPct
                 End If
                 If showImages Then
                     Set singleRow = New Collection
                     singleRow.Add rawRow
-                    PutPhotoLink outputSheet.Cells(pos, 10), singleRow, photos
+                    QueuePhoto pos, singleRow
                 End If
             Next detailsRow
             lastDetail = pos
@@ -729,6 +847,8 @@ Private Sub RenderReport(ByVal outputSheet As Worksheet, ByVal areaFilter As Str
         LiveReportGroup outputSheet, raw, summaryRow, rows, pos, CStr(info(5)), separateComments, separatePct
         pos = pos + 1
     Next key
+    LoggaTid "  Gruppering och innehåll", buildTick
+    FlushReport outputSheet, pos - 1, photos
     With outputSheet
         .Range("A4:L" & pos).VerticalAlignment = xlCenter
         .Range("I5:I" & pos).WrapText = True
@@ -751,7 +871,8 @@ Public Sub UppdateraRapporter()
     Dim oldCalc As XlCalculation, i As Long, areaSheet As Worksheet, ws As Worksheet
     Dim raw As Worksheet, areas As Object, names As Object, photos As Object
     Dim area As Variant, areaValue As String, name As String, generated As Long
-    Dim stegTid As Double, totalTid As Double
+    Dim stegTid As Double, totalTid As Double, oldEvents As Boolean
+    oldEvents = Application.EnableEvents
     On Error GoTo Failed
     stegTid = Timer
     totalTid = stegTid
@@ -761,6 +882,8 @@ Public Sub UppdateraRapporter()
     Application.ScreenUpdating = False
     Application.DisplayAlerts = False
     Application.Calculation = xlCalculationManual
+    Application.EnableEvents = False
+    PrepareReportData
     Set raw = ThisWorkbook.Worksheets(SHEET_RAW)
     Set areas = CreateObject("Scripting.Dictionary")
     For i = 2 To LastRowIn(raw, 1)
@@ -815,10 +938,12 @@ Public Sub UppdateraRapporter()
     Application.Calculate
     LoggaTid "Slutberäkning", stegTid
     LoggaTid "TOTALT", totalTid
+    Application.EnableEvents = oldEvents
     Application.StatusBar = False
     MsgBox "Rapporter uppdaterade. Sammanställning + " & generated & " delområdesflikar skapades. Klicka på + för objektspecifika detaljer.", vbInformation
     Exit Sub
 Failed:
+    Application.EnableEvents = oldEvents
     Application.StatusBar = False
     Application.ScreenUpdating = True
     Application.DisplayAlerts = True

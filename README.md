@@ -68,3 +68,36 @@ Tidsloggen visar nu Bildreferenser i stället för Bildregister.
 Kontrollera i Excel: ett foto, flera foton, upprepade bildnamn, tomt bildfält,
 saknad fotomapp och fullständig sökväg. Kör även utan fliken Bilder.
 Excel-körning och åtkomst till användarens fotomapp är inte verifierade här.
+
+## Blockskrivning och gemensamma format
+
+Knapp 2 läser Rådata och Regler till minnet och klassificerar varje objekt en
+gång per körning. Varje rapport byggs i en buffert med värden och levande
+formler och skrivs med ett sammanhängande Formula-anrop. Text och numeriska
+objekt-ID:n behåller sina typer så att ID-uppslag fungerar.
+
+Mallens åtta radtyper läses till 96 återanvändbara cellformat med namn
+Inventering_Auto_*. Dessa format uppdateras från Rapportmall vid varje körning
+och appliceras i omgångar om högst 50 rader. Ingen kopiering via Urklipp används.
+Sammanslagningar inom mallraden, grupperingar och fotolänkar hanteras separat.
+Befintliga begränsningar för villkorsstyrd formatering och sammanslagningar
+över flera rader gäller fortfarande. Genererade delområdesblad byggs fortfarande om.
+Excel-händelser pausas under genereringen och återställs även vid fel.
+
+Tidsloggen visar även Gruppering och innehåll, Blockskrivning, Formatering
+och Bildlänkar inom varje rapport. Dessa är deltider som redan ingår i
+rapportens tid; summera dem inte en gång till med huvudtiderna.
+Förberedelser inkluderar nu inläsning, regelklassificering och mallformat.
+
+### Verifiera i Excel före ordinarie användning
+
+Kör på en kopia av samma arbetsbok som tidigare tog 351,41 sekunder.
+Jämför kategorier, ordning, radantal, mängder, sparprocent, skick, formatering,
+utfällbara rader och fotolänkar med föregående version. Kontrollera både
+numeriska ID:n och text-ID:n samt littera med inledande nollor. Ändra därefter
+mängd och skick i Rådata och kontrollera att befintliga rapportformler reagerar.
+Kör knapp 2 två gånger för att kontrollera att format och innehåll inte växer
+eller dubbleras. Kontrollera även tomma rapporter och olika rapportnivåer.
+
+Statisk kontroll är gjord, men VBA-kompilering, Excel-beteende och faktisk
+tidsvinst behöver verifieras i Excel; Excel finns inte i molnmiljön.
