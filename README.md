@@ -113,3 +113,16 @@ Tidsloggen listar huvudkategorier per blad för att felsöka saknade kategorier.
 Saknade naturstens-/granitkategorier har inte kunnat reproduceras utan den
 aktuella arbetsboken. Kontrollera dem efter uppdatering; kategoriloggen visar
 vilka huvudkategorier koden faktiskt genererar. Regelprioriteringen är oförändrad.
+
+## Exempeldata i Rapportmall får inte följa med
+
+Rapportmall används nu enbart för utseende, kolumnbredder, radhöjder och
+sammanslagningar. Dess exempelvärden och exempelformler överförs aldrig.
+Tidigare kunde till exempel 120 från C12 ligga kvar i m²-kolumnen när en
+rapportgrupp använde lpm, och exempelbildtext kunde ligga kvar utan foton.
+Alla rapportvärden och formler kommer nu från rapportgenereringen.
+
+Uttrycklig enhet i Regler gäller först. För Auto väljs lpm för exakt SMG2,
+därefter m² för CLASS som innehåller Hårdgjort. Övriga Auto-objekt använder
+längd K före area J och annars antal. SMG20 omfattas inte av SMG2-undantaget. Klassificeringsreglernas högsta prioritet gäller även materialnamn
+som innehåller flera matchande ord, exempelvis smågatsten i betong.

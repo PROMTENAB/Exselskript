@@ -16,7 +16,7 @@ Private Const SHEET_SUM As String = "Sammanställning"
 Private Const GENERATED_PREFIX As String = "OMR - "
 Private Const LIVE_LAST_ROW As Long = 2000
 Private mOutput() As Variant, mFormula() As Boolean, mRowType() As Long
-Private mRaw As Variant, mRules As Variant, mTemplate As Variant
+Private mRaw As Variant, mRules As Variant
 Private mPhotoJobs As Collection
 Private mRulesByRow As Object, mUnits() As String
 Private mRawLast As Long
@@ -139,6 +139,14 @@ Private Function DetectUnit(ByVal ws As Worksheet, ByVal i As Long, ByVal pref A
     If pref = "m²" Or pref = "lpm" Or pref = "antal" Then
         DetectUnit = pref: Exit Function
     End If
+    ' Auto: SMG2 är linjärt även när exporten också innehåller en area.
+    If StrComp(S(mRaw(i, 1)), "SMG2", vbTextCompare) = 0 Then
+        DetectUnit = "lpm": Exit Function
+    End If
+    ' Hårdgjorda ytor kan ha både area och omkrets; mängden är arean.
+    If InStr(1, S(mRaw(i, 12)), "Hårdgjort", vbTextCompare) > 0 Then
+        DetectUnit = "m²": Exit Function
+    End If
     If N(mRaw(i, 11)) <> 0 Then
         DetectUnit = "lpm"
     ElseIf N(mRaw(i, 10)) <> 0 Then
@@ -214,7 +222,6 @@ Private Sub PrepareReportData()
         mUnits(i) = DetectUnit(ws, i, CStr(rule(3)))
     Next i
     Set tmpl = ThisWorkbook.Worksheets("Rapportmall")
-    mTemplate = tmpl.Range("A1:L14").FormulaR1C1
     For Each t In Array(1, 2, 4, 6, 8, 10, 12, 14)
         For c = 1 To 12
             Set sc = tmpl.Cells(CLng(t), c)
@@ -270,17 +277,12 @@ Private Sub PrepareReportData()
 End Sub
 
 Private Sub CopyTemplateRow(ByVal dest As Worksheet, ByVal outRow As Long, ByVal templateRow As Long)
-    Dim c As Long, value As Variant
+    Dim c As Long
+    ' Rapportmall är en formatmall. Exempelvärden och exempelformler får aldrig bli rapportdata.
     mRowType(outRow) = templateRow
     For c = 1 To 12
-        value = mTemplate(templateRow, c)
-        If VarType(value) = vbString Then
-            If Left$(value, 1) = "=" Then
-                value = Application.ConvertFormula(value, xlR1C1, xlA1, xlAbsolute, dest.Cells(outRow, c))
-                mFormula(outRow, c) = True
-            End If
-        End If
-        mOutput(outRow, c) = value
+        mOutput(outRow, c) = Empty
+        mFormula(outRow, c) = False
     Next c
 End Sub
 
