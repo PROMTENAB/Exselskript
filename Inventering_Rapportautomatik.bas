@@ -337,7 +337,10 @@ Private Function HeadingSortKey(ByVal rule As Variant) As String
     For level = 0 To 2
         title = UCase$(CStr(rule(level)))
         path = path & Chr$(30) & title
-        If level = 1 And UCase$(S(rule(0))) = "UTRUSTNING" Then
+        If level = 0 And UCase$(S(rule(0))) = "UTRUSTNING" And UCase$(S(rule(1))) = "SPARAS" Then
+            ' Sparad utrustning placeras efter natursten (10-15), före betong (21-23).
+            result = result & "000018|" & title & "|"
+        ElseIf level = 1 And UCase$(S(rule(0))) = "UTRUSTNING" Then
             result = result & EquipmentRank(title) & "|" & title & "|"
         Else
             result = result & Format$(CDbl(mHeadingOrder(path)), "000000") & "|" & title & "|"

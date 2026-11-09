@@ -167,3 +167,13 @@ När en aktiv SKICK-regel finns hålls olika skick isär även i övriga grupper
 Det förhindrar att en generell materialgrupp summerar samma objekt som en
 särskild skickgrupp. Ta bort/inaktivera SKICK-reglerna om denna uppdelning
 inte önskas; automatisk skickuppdelning under UTRUSTNING finns alltid kvar.
+
+## Sparad utrustning före betong
+
+UTRUSTNING / SPARAS har ett särskilt sorteringsvärde 18 på huvudnivån.
+Med rekommenderade ordningstal visas natursten (10–15), sparad utrustning
+(18), betong (21–23) och därefter övriga kategorier. KASSERAS och EJ BEDÖMT
+behåller utrustningens ordningstal i Regler, normalt 40. Huvudrubriken
+UTRUSTNING kan därför förekomma i två avsnitt. Prioritet och mängdberäkning
+påverkas inte. Detta undantag är i koden; ändra inte hela utrustningsregeln
+till 18 om kasserad utrustning ska ligga kvar längre ned.
