@@ -126,3 +126,18 @@ Uttrycklig enhet i Regler gäller först. För Auto väljs lpm för exakt SMG2,
 därefter m² för CLASS som innehåller Hårdgjort. Övriga Auto-objekt använder
 längd K före area J och annars antal. SMG20 omfattas inte av SMG2-undantaget. Klassificeringsreglernas högsta prioritet gäller även materialnamn
 som innehåller flera matchande ord, exempelvis smågatsten i betong.
+
+## Infällda detaljer och rubrikordning
+
+Efter all formatering fälls rapportens objektrader ihop med Outline.ShowLevels
+RowLevels:=1. Rubriker och grupprader visas; plusknapparna öppnar objekten.
+Detta görs sist eftersom tilldelning av radhöjd kan visa tidigare dolda rader.
+
+Ordning i kolumn J styr rubrikernas placering; Prioritet i A väljer matchande
+regel. Sorteringen håller nu ihop varje huvudkategori, därefter underkategori
+och tredje rubriknivå. Varje rubrik får det lägsta ordningstalet bland sina
+matchade regler i hela rådata, så samma ordning används mellan delområden.
+Naturstensregler med Ordning 10–15 kommer före Betong 20, Murar/Kantstöd 25–27
+och Räcken 30–32. Inom samma rubrik sorteras littera och material alfabetiskt.
+Sparprocent ändrar inte rubrikordningen; materialslag innebär inte automatiskt
+att objektet ska sparas. Ändringar i Regler kräver UppdateraRapporter.

@@ -19,6 +19,7 @@ Private mOutput() As Variant, mFormula() As Boolean, mRowType() As Long
 Private mRaw As Variant, mRules As Variant
 Private mPhotoJobs As Collection
 Private mRulesByRow As Object, mUnits() As String
+Private mHeadingOrder As Object
 Private mRawLast As Long
 Private mOmitLit As String, mOmitMaterial As String
 Private mTemplateStyles(1 To 14, 1 To 12) As String
@@ -212,6 +213,7 @@ Private Sub PrepareReportData()
         mOmitMaterial = S(.Range("B7").Value2)
     End With
     Set mRulesByRow = CreateObject("Scripting.Dictionary")
+    Set mHeadingOrder = CreateObject("Scripting.Dictionary")
     ReDim mUnits(1 To Application.Max(2, mRawLast))
     Set ws = ThisWorkbook.Worksheets(SHEET_RAW)
     For i = 2 To mRawLast
@@ -219,6 +221,7 @@ Private Sub PrepareReportData()
         If Len(area) = 0 Then area = "Utan delområde"
         rule = GetRule(S(mRaw(i, 2)), S(mRaw(i, 12)), S(mRaw(i, 1)), area)
         mRulesByRow.Add CStr(i), rule
+        RememberHeadingOrder rule
         mUnits(i) = DetectUnit(ws, i, CStr(rule(3)))
     Next i
     Set tmpl = ThisWorkbook.Worksheets("Rapportmall")
@@ -275,6 +278,29 @@ Private Sub PrepareReportData()
         Next c
     Next t
 End Sub
+
+Private Sub RememberHeadingOrder(ByVal rule As Variant)
+    Dim level As Long, path As String, order As Double
+    order = N(rule(4))
+    For level = 0 To 2
+        path = path & Chr$(30) & UCase$(CStr(rule(level)))
+        If Not mHeadingOrder.Exists(path) Then
+            mHeadingOrder.Add path, order
+        ElseIf order < CDbl(mHeadingOrder(path)) Then
+            mHeadingOrder(path) = order
+        End If
+    Next level
+End Sub
+
+Private Function HeadingSortKey(ByVal rule As Variant) As String
+    Dim level As Long, path As String, result As String, title As String
+    For level = 0 To 2
+        title = UCase$(CStr(rule(level)))
+        path = path & Chr$(30) & title
+        result = result & Format$(CDbl(mHeadingOrder(path)), "000000") & "|" & title & "|"
+    Next level
+    HeadingSortKey = result
+End Function
 
 Private Sub CopyTemplateRow(ByVal dest As Worksheet, ByVal outRow As Long, ByVal templateRow As Long)
     Dim c As Long
@@ -771,8 +797,7 @@ Private Sub RenderReport(ByVal outputSheet As Worksheet, ByVal areaFilter As Str
                     saved.Add groupKey, 0#
                     missing.Add groupKey, 0&
                     meta.Add groupKey, Array(CStr(rule(0)), CStr(rule(1)), CStr(rule(2)), lit, mat, unit, condition, area)
-                    sortValues.Add groupKey, Format$(N(rule(4)), "000000") & "|" & UCase$(CStr(rule(0))) & "|" & _
-                       UCase$(CStr(rule(1))) & "|" & UCase$(CStr(rule(2))) & "|" & UCase$(lit) & "|" & _
+                    sortValues.Add groupKey, HeadingSortKey(rule) & UCase$(lit) & "|" & _
                        UCase$(mat) & "|" & UCase$(area) & "|" & groupKey
                 End If
                 Set rows = groups(groupKey)
@@ -902,6 +927,8 @@ Private Sub RenderReport(ByVal outputSheet As Worksheet, ByVal areaFilter As Str
         .Range("F5:F" & pos).NumberFormat = "0%"
         .Rows("4:4").AutoFilter
         .PageSetup.PrintArea = "$A$1:$K$" & pos - 1
+        ' Radhöjder kan visa tidigare dolda rader. Fäll ihop först EFTER all formatering.
+        .Outline.ShowLevels RowLevels:=1
     End With
 End Sub
 
