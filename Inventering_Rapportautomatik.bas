@@ -20,6 +20,7 @@ Private mRaw As Variant, mRules As Variant
 Private mPhotoJobs As Collection
 Private mRulesByRow As Object, mUnits() As String
 Private mHeadingOrder As Object
+Private mUseConditionRules As Boolean
 Private mRawLast As Long
 Private mOmitLit As String, mOmitMaterial As String
 Private mTemplateStyles(1 To 14, 1 To 12) As String
@@ -99,7 +100,7 @@ Private Function ImagePath(ByVal imageName As String) As String
 End Function
 
 Private Function GetRule(ByVal material As String, ByVal className As String, _
-                         ByVal lit As String, ByVal area As String) As Variant
+                         ByVal lit As String, ByVal area As String, ByVal condition As String) As Variant
     Dim ws As Worksheet, r As Long, last As Long, bestRow As Long
     Dim bestScore As Double, score As Double, fieldVal As String
     Dim fieldName As String, needle As String, localArea As String
@@ -116,6 +117,7 @@ Private Function GetRule(ByVal material As String, ByVal className As String, _
                     Case "MATERIALTYP": fieldVal = material
                     Case "CLASS": fieldVal = className
                     Case "LITTRERING": fieldVal = lit
+                    Case "SKICK": fieldVal = condition
                     Case Else: fieldVal = ""
                 End Select
                 If Len(needle) = 0 Or InStr(1, fieldVal, needle, vbTextCompare) > 0 Then
@@ -127,12 +129,39 @@ Private Function GetRule(ByVal material As String, ByVal className As String, _
         End If
     Next r
     If bestRow = 0 Then
-        GetRule = Array("ÖVRIGT", "OKLASSIFICERAT", "", "Auto", 999)
+        GetRule = Array("ÖVRIGT", "OKLASSIFICERAT", "", "Auto", 999, False)
     Else
         GetRule = Array(S(mRules(bestRow, 6)), S(mRules(bestRow, 7)), _
                         S(mRules(bestRow, 8)), S(mRules(bestRow, 9)), _
-                        N(mRules(bestRow, 10)))
+                        N(mRules(bestRow, 10)), UCase$(S(mRules(bestRow, 3))) = "SKICK")
     End If
+End Function
+
+Private Function EquipmentStatus(ByVal value As Variant, ByVal sourceRow As Long) As String
+    If Len(S(value)) = 0 Then
+        EquipmentStatus = "EJ BEDÖMT"
+    ElseIf Not IsNumeric(value) Then
+        Err.Raise vbObjectError + 220, "EquipmentStatus", "Sparas % måste vara ett tal mellan 0 och 100 % på rådatarad " & sourceRow
+    ElseIf CDbl(value) < 0 Or CDbl(value) > 1 Then
+        Err.Raise vbObjectError + 221, "EquipmentStatus", "Sparas % måste ligga mellan 0 och 100 % på rådatarad " & sourceRow
+    ElseIf CDbl(value) = 0 Then
+        EquipmentStatus = "KASSERAS"
+    Else
+        EquipmentStatus = "SPARAS"
+    End If
+End Function
+
+Private Function EquipmentRank(ByVal title As String) As String
+    Select Case UCase$(title)
+        Case "SPARAS": EquipmentRank = "1"
+        Case "KASSERAS": EquipmentRank = "2"
+        Case "EJ BEDÖMT": EquipmentRank = "3"
+        Case Else: EquipmentRank = "4"
+    End Select
+End Function
+
+Private Function FormulaText(ByVal value As String) As String
+    FormulaText = Chr$(34) & Replace(value, Chr$(34), Chr$(34) & Chr$(34)) & Chr$(34)
 End Function
 
 Private Function DetectUnit(ByVal ws As Worksheet, ByVal i As Long, ByVal pref As String) As String
@@ -208,6 +237,10 @@ Private Sub PrepareReportData()
     mRaw = ws.Range("A1:L" & Application.Max(2, mRawLast)).Value2
     Set ws = ThisWorkbook.Worksheets(SHEET_RULES)
     mRules = ws.Range("A1:J" & Application.Max(5, LastRowIn(ws, 1))).Value2
+    mUseConditionRules = False
+    For i = 5 To UBound(mRules, 1)
+        If IsYes(mRules(i, 2)) And UCase$(S(mRules(i, 3))) = "SKICK" Then mUseConditionRules = True
+    Next i
     With ThisWorkbook.Worksheets(SHEET_PREF)
         mOmitLit = S(.Range("B6").Value2)
         mOmitMaterial = S(.Range("B7").Value2)
@@ -219,7 +252,14 @@ Private Sub PrepareReportData()
     For i = 2 To mRawLast
         area = S(mRaw(i, 3))
         If Len(area) = 0 Then area = "Utan delområde"
-        rule = GetRule(S(mRaw(i, 2)), S(mRaw(i, 12)), S(mRaw(i, 1)), area)
+        rule = GetRule(S(mRaw(i, 2)), S(mRaw(i, 12)), S(mRaw(i, 1)), area, S(mRaw(i, 4)))
+        rule(5) = CBool(rule(5)) Or mUseConditionRules
+        If UCase$(S(rule(0))) = "UTRUSTNING" Then
+            rule(1) = EquipmentStatus(mRaw(i, 6), i)
+            rule(2) = S(mRaw(i, 4))
+            If Len(rule(2)) = 0 Then rule(2) = "SKICK EJ ANGIVET"
+            rule(5) = True
+        End If
         mRulesByRow.Add CStr(i), rule
         RememberHeadingOrder rule
         mUnits(i) = DetectUnit(ws, i, CStr(rule(3)))
@@ -297,7 +337,11 @@ Private Function HeadingSortKey(ByVal rule As Variant) As String
     For level = 0 To 2
         title = UCase$(CStr(rule(level)))
         path = path & Chr$(30) & title
-        result = result & Format$(CDbl(mHeadingOrder(path)), "000000") & "|" & title & "|"
+        If level = 1 And UCase$(S(rule(0))) = "UTRUSTNING" Then
+            result = result & EquipmentRank(title) & "|" & title & "|"
+        Else
+            result = result & Format$(CDbl(mHeadingOrder(path)), "000000") & "|" & title & "|"
+        End If
     Next level
     HeadingSortKey = result
 End Function
@@ -547,9 +591,10 @@ Private Function GroupTerms(ByVal wsRaw As Worksheet, ByVal rows As Collection, 
     Dim seen As Object, v As Variant, rr As Long, key As String
     Dim cls As String, area As String, args As String, product As String
     Dim term As String, result As String, amtCol As String, countArgs As String
-    Dim sourceFirst As Long
+    Dim sourceFirst As Long, sourceRule As Variant, status As String, conditionText As String
     Set seen = CreateObject("Scripting.Dictionary")
     sourceFirst = CLng(rows(1))
+    sourceRule = mRulesByRow(CStr(sourceFirst))
     If unit = "lpm" Then
         amtCol = "K"
     ElseIf unit = "m²" Then
@@ -568,6 +613,25 @@ Private Function GroupTerms(ByVal wsRaw As Worksheet, ByVal rows As Collection, 
                 "," & RngRaw("C") & "," & XlText(area) & "," & RngRaw("L") & "," & XlText(cls)
             product = "--(" & RngRaw("A") & "=$A" & outRow & ")*--(" & RngRaw("B") & "=$B" & outRow & ")" & _
                 "*--(" & RngRaw("C") & "=" & XlText(area) & ")*--(" & RngRaw("L") & "=" & XlText(cls) & ")"
+            If CBool(sourceRule(5)) Then
+                conditionText = FormulaText(S(mRaw(sourceFirst, 4)))
+                args = args & "," & RngRaw("D") & "," & ExactConditionCriteria(conditionText)
+                product = product & "*--(" & RngRaw("D") & "=" & conditionText & ")"
+            End If
+            If UCase$(S(sourceRule(0))) = "UTRUSTNING" Then
+                status = CStr(sourceRule(1))
+                Select Case status
+                    Case "SPARAS"
+                        args = args & "," & RngRaw("F") & ","">0"""
+                        product = product & "*--(" & RngRaw("F") & ">0)"
+                    Case "KASSERAS"
+                        args = args & "," & RngRaw("F") & ",0," & RngRaw("F") & ",""<>"""
+                        product = product & "*--(" & RngRaw("F") & "=0)*--(LEN(" & RngRaw("F") & ")>0)"
+                    Case "EJ BEDÖMT"
+                        args = args & "," & RngRaw("F") & ","""""
+                        product = product & "*--(LEN(" & RngRaw("F") & ")=0)"
+                End Select
+            End If
             If splitComment Then
                 args = args & "," & RngRaw("E") & ",'Rådata'!$E$" & sourceFirst
                 product = product & "*--(" & RngRaw("E") & "='Rådata'!$E$" & sourceFirst & ")"
@@ -788,6 +852,7 @@ Private Sub RenderReport(ByVal outputSheet As Worksheet, ByVal areaFilter As Str
                 End Select
                 groupKey = CStr(rule(0)) & Chr$(30) & CStr(rule(1)) & Chr$(30) & CStr(rule(2)) & Chr$(30) _
                     & lit & Chr$(30) & mat & Chr$(30) & unit
+                If CBool(rule(5)) Then groupKey = groupKey & Chr$(30) & S(mRaw(i, 4))
                 If separateComments Then groupKey = groupKey & Chr$(30) & valComment
                 If separatePct Then groupKey = groupKey & Chr$(30) & S(mRaw(i, 6))
                 If Not groups.Exists(groupKey) Then

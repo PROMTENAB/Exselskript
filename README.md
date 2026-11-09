@@ -141,3 +141,29 @@ Naturstensregler med Ordning 10–15 kommer före Betong 20, Murar/Kantstöd 25�
 och Räcken 30–32. Inom samma rubrik sorteras littera och material alfabetiskt.
 Sparprocent ändrar inte rubrikordningen; materialslag innebär inte automatiskt
 att objektet ska sparas. Ändringar i Regler kräver UppdateraRapporter.
+
+## Skick och utrustning
+
+Reglernas Sökfält stöder nu SKICK (Rådata kolumn D), utöver Materialtyp,
+CLASS och LITTRERING. Sökvärdet matchas som deltext utan skiftlägeskänslighet.
+Högsta prioritet och lokala undantag gäller som tidigare. En generell SKICK-regel
+kan matcha alla material; den är inte automatiskt begränsad till utrustning.
+
+Objekt vars vinnande regel har Rubriknivå 1 UTRUSTNING får automatiskt:
+- Nivå 2 SPARAS för sparandel >0, KASSERAS för uttryckligen 0, EJ BEDÖMT för tomt.
+- Nivå 3 objektets skick, eller SKICK EJ ANGIVET om det är tomt.
+Ordningen är SPARAS, KASSERAS, EJ BEDÖMT. Dessa nivåer ersätter regelns egna
+nivå 2 och 3 för UTRUSTNING. Välj tre rubriknivåer i Rapportval för att se skickrubriker.
+Andel utanför 0–100 % eller icke-numerisk andel stoppar genereringen med radnummer.
+
+Gruppformlerna avgränsas även på skick och sparstatus så att kassering inte
+summeras med sparade objekt. En delvis sparad post hamnar i SPARAS.
+Kör UppdateraRapporter efter ändring av skick eller sparstatus för att
+flytta objekt, uppdatera rubriker och detaljrader. Gamla rubriker kan inte
+flyttas av enbart formler. Skickrubriker skapas inte automatiskt för övriga
+huvudkategorier; där kan egna SKICK-regler användas.
+
+När en aktiv SKICK-regel finns hålls olika skick isär även i övriga grupper.
+Det förhindrar att en generell materialgrupp summerar samma objekt som en
+särskild skickgrupp. Ta bort/inaktivera SKICK-reglerna om denna uppdelning
+inte önskas; automatisk skickuppdelning under UTRUSTNING finns alltid kvar.
