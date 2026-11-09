@@ -296,18 +296,62 @@ Private Sub FlushReport(ByVal ws As Worksheet, ByVal lastRow As Long, ByVal phot
     Dim block() As Variant, r As Long, c As Long, t As Variant, batch As Range
     Dim count As Long, sc As Range, merged As Range, job As Variant, tick As Double
     Dim tmpl As Worksheet, photoRows As Collection
+    Dim firstFormula As Long, k As Long, formulas() As Variant
     tick = Timer
     ReDim block(1 To lastRow, 1 To 12)
-    For r = 1 To lastRow
-        For c = 1 To 12
-            block(r, c) = mOutput(r, c)
-            ' Formula-skrivning ska inte tolka littera, ID eller text som formler/tal.
-            If Not mFormula(r, c) And VarType(block(r, c)) = vbString Then
-                If Len(block(r, c)) > 0 Then block(r, c) = "'" & block(r, c)
+    ws.Range("A1").Resize(lastRow, 12).NumberFormat = "General"
+    For c = 1 To 12
+        Set batch = Nothing
+        count = 0
+        For r = 1 To lastRow
+            If Not mFormula(r, c) Then
+                block(r, c) = mOutput(r, c)
+                ' Bevara text-ID och littera utan att lägga till apostrofer i innehållet.
+                If VarType(block(r, c)) = vbString Then
+                    If Len(block(r, c)) > 0 Then
+                        If batch Is Nothing Then
+                            Set batch = ws.Cells(r, c)
+                        Else
+                            Set batch = Application.Union(batch, ws.Cells(r, c))
+                        End If
+                        count = count + 1
+                        If count = 50 Then
+                            batch.NumberFormat = "@"
+                            Set batch = Nothing
+                            count = 0
+                        End If
+                    End If
+                End If
             End If
-        Next c
-    Next r
-    ws.Range("A1").Resize(lastRow, 12).Formula = block
+        Next r
+        If Not batch Is Nothing Then batch.NumberFormat = "@"
+    Next c
+    ws.Range("A1").Resize(lastRow, 12).Value2 = block
+    ' Skriv endast riktiga formler med Formula, i sammanhängande kolumnblock.
+    For c = 1 To 12
+        r = 1
+        Do While r <= lastRow
+            If mFormula(r, c) Then
+                firstFormula = r
+                Do While r <= lastRow
+                    If Not mFormula(r, c) Then Exit Do
+                    r = r + 1
+                Loop
+                ReDim formulas(1 To r - firstFormula, 1 To 1)
+                For k = firstFormula To r - 1
+                    formulas(k - firstFormula + 1, 1) = mOutput(k, c)
+                Next k
+                With ws.Cells(firstFormula, c).Resize(r - firstFormula, 1)
+                    .NumberFormat = "General"
+                    .Formula = formulas
+                    If IsNull(.HasFormula) Then Err.Raise vbObjectError + 211, "FlushReport", "Alla rapportformler kunde inte skrivas."
+                    If Not .HasFormula Then Err.Raise vbObjectError + 212, "FlushReport", "Rapportformler blev text."
+                End With
+            Else
+                r = r + 1
+            End If
+        Loop
+    Next c
     LoggaTid "  Blockskrivning", tick
     Set tmpl = ThisWorkbook.Worksheets("Rapportmall")
     For Each t In Array(1, 2, 4, 6, 8, 10, 12, 14)
@@ -754,6 +798,7 @@ Private Sub RenderReport(ByVal outputSheet As Worksheet, ByVal areaFilter As Str
         info = meta(key)
         l1 = CStr(info(0)): l2 = CStr(info(1)): l3 = CStr(info(2))
         If l1 <> prev1 Then
+            Debug.Print "  Kategori [" & outputSheet.Name & "]: " & l1
             CategoryHeading outputSheet, pos, l1, 1: pos = pos + 1
             prev1 = l1: prev2 = "": prev3 = ""
         End If
@@ -908,6 +953,7 @@ Public Sub UppdateraRapporter()
     On Error Resume Next
     ws.UsedRange.ClearOutline
     On Error GoTo Failed
+    ws.UsedRange.EntireRow.Hidden = False
     ws.UsedRange.UnMerge
     ws.Cells.Clear
     LoggaTid "Rensa gamla rapporter", stegTid

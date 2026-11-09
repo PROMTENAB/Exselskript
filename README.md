@@ -73,7 +73,7 @@ Excel-körning och åtkomst till användarens fotomapp är inte verifierade här
 
 Knapp 2 läser Rådata och Regler till minnet och klassificerar varje objekt en
 gång per körning. Varje rapport byggs i en buffert med värden och levande
-formler och skrivs med ett sammanhängande Formula-anrop. Text och numeriska
+formler och skrivs med Value2 för värden samt Formula för sammanhängande formelblock. Text och numeriska
 objekt-ID:n behåller sina typer så att ID-uppslag fungerar.
 
 Mallens åtta radtyper läses till 96 återanvändbara cellformat med namn
@@ -101,3 +101,15 @@ eller dubbleras. Kontrollera även tomma rapporter och olika rapportnivåer.
 
 Statisk kontroll är gjord, men VBA-kompilering, Excel-beteende och faktisk
 tidsvinst behöver verifieras i Excel; Excel finns inte i molnmiljön.
+
+## Rättning av text och formler vid blockskrivning
+
+Blockskrivningen lägger inte längre till apostrofer i textvärden. Text-ID:n och
+littera skyddas med textformat före Value2-skrivning; formler skrivs separat
+med General-format och kontrolleras med HasFormula. Mallformat sätts därefter.
+Den återanvända sammanställningen återställer också tidigare dolda rader.
+Tidsloggen listar huvudkategorier per blad för att felsöka saknade kategorier.
+
+Saknade naturstens-/granitkategorier har inte kunnat reproduceras utan den
+aktuella arbetsboken. Kontrollera dem efter uppdatering; kategoriloggen visar
+vilka huvudkategorier koden faktiskt genererar. Regelprioriteringen är oförändrad.
