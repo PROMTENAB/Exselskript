@@ -924,16 +924,34 @@ End Sub
 
 
 Public Sub ImporteraFranVectorworks()
-    Dim choice As Variant, book As Workbook, src As Worksheet, dest As Worksheet
-    Dim sh As Object, dh As Object, ids As Object, seen As Object, key As Variant
-    Dim r As Long, c As Long, target As Long, last As Long, id As String
-    Dim keep As Boolean, protected As Boolean, required As Variant, field As Variant
-    Dim oldEvents As Boolean, newValue As Variant, oldValue As Variant, added As Long, updated As Long
-    Dim sourceTotal As Boolean, sumField As Variant, totalValue As Double, rr As Long, hasValues As Boolean
-    On Error GoTo Failed
+    Dim choice As Variant, book As Workbook, src As Worksheet, dest As Worksheet, opened As Workbook
+    Dim sh As Object, dh As Object, ids As Object, seen As Object, field As Variant, key As Variant
+    Dim sourceData As Variant, existing As Variant, values() As Variant, changed() As Boolean
+    Dim sourceLast As Long, destLast As Long, sourceCols As Long, destCols As Long, finalCols As Long, finalLast As Long
+    Dim r As Long, c As Long, target As Long, id As String, required As Variant
+    Dim keep As Boolean, protected As Boolean, oldValue As Variant, newValue As Variant
+    Dim oldCalc As XlCalculation, oldEvents As Boolean, oldScreen As Boolean, oldStatus As Variant
+    Dim added As Long, updated As Long, conflicts As Long, blankRow As Boolean, totalRow As Boolean
+    Dim sourceSums(0 To 3) As Double, destSums(0 To 3) As Double, sumFields As Variant, j As Long
+    Dim destTotal As Boolean, sourceTotal As Boolean, backupPath As String, failure As String, wrote As Boolean
+    Dim cancelled As Boolean, successful As Boolean, lo As ListObject, dataTable As ListObject, finalRange As Range
+    Dim firstRow As Long, lastRun As Long, textRun As Boolean, chunk() As Variant, k As Long
+    Dim audit As Worksheet, issue As Variant, auditData() As Variant, auditRow As Long
+    oldCalc = Application.Calculation
     oldEvents = Application.EnableEvents
+    oldScreen = Application.ScreenUpdating
+    oldStatus = Application.StatusBar
+    On Error GoTo Failed
     choice = Application.GetOpenFilename("Excel (*.xlsx;*.xlsm;*.xls),*.xlsx;*.xlsm;*.xls")
-    If VarType(choice) = vbBoolean Then Exit Sub
+    If VarType(choice) = vbBoolean Then cancelled = True: GoTo CleanUp
+    If Len(ThisWorkbook.Path) = 0 Then Err.Raise vbObjectError + 332, , "Spara testarbetsboken före import."
+    For Each opened In Application.Workbooks
+        If StrComp(opened.FullName, CStr(choice), vbTextCompare) = 0 Then Err.Raise vbObjectError + 342, , "Stäng importfilen först. Den får inte vara målfilen eller redan öppen."
+    Next opened
+    Application.EnableEvents = False
+    Application.ScreenUpdating = False
+    Application.Calculation = xlCalculationManual
+    Application.StatusBar = "Import: filöppning..."
     Set book = Workbooks.Open(CStr(choice), ReadOnly:=True, UpdateLinks:=False)
     Set src = book.Worksheets(1): Set dest = ThisWorkbook.Worksheets(SHEET_RAW)
     Set sh = VImportHeaders(src): Set dh = VImportHeaders(dest)
@@ -942,101 +960,207 @@ Public Sub ImporteraFranVectorworks()
         If Not sh.Exists(VNorm(field)) Then Err.Raise vbObjectError + 330, , "Importkolumn saknas: " & field
         If Not dh.Exists(VNorm(field)) Then Err.Raise vbObjectError + 331, , "Rådatakolumn saknas: " & field
     Next field
-    If Len(ThisWorkbook.Path) = 0 Then Err.Raise vbObjectError + 332, , "Spara testarbetsboken före import."
-    ThisWorkbook.SaveCopyAs ThisWorkbook.Path & Application.PathSeparator & "Import_backup_" & Format$(Now, "yyyymmdd_hhnnss") & "_" & CLng(Timer * 10) & ".xlsm"
+    sourceLast = VLastRow(src): destLast = VLastRow(dest)
+    sourceCols = src.Cells(1, src.Columns.Count).End(xlToLeft).Column
+    destCols = dest.Cells(1, dest.Columns.Count).End(xlToLeft).Column
+    sourceData = src.Range(src.Cells(1, 1), src.Cells(Application.Max(2, sourceLast), sourceCols)).Value2
+    existing = dest.Range(dest.Cells(1, 1), dest.Cells(Application.Max(2, destLast), destCols)).Value2
+    Application.StatusBar = "Import: säkerhetskopiering..."
+    backupPath = ThisWorkbook.Path & Application.PathSeparator & "Import_backup_" & Format$(Now, "yyyymmdd_hhnnss") & "_" & CLng(Timer * 10) & ".xlsm"
+    ThisWorkbook.SaveCopyAs backupPath
+    Application.StatusBar = "Import: ID-kontroll och verifiering av exporttotaler..."
     Set vIssues = New Collection
     Set ids = CreateObject("Scripting.Dictionary"): Set seen = CreateObject("Scripting.Dictionary")
-    last = VLastRow(dest)
-    For r = 2 To last
-        id = VNorm(dest.Cells(r, dh("INFO-ID-REFERENS")).Value2)
-        If Len(id) > 0 Then
-            If ids.Exists(id) Then Err.Raise vbObjectError + 333, , "Dubbelt ID i befintlig Rådata: " & id
-            ids.Add id, r
+    sumFields = Array("INFO-ID-REFERENS", "ANTAL", "AREA", "LÄNGD")
+    For r = 2 To sourceLast
+        For c = 1 To sourceCols
+            If IsError(sourceData(r, c)) Then Err.Raise vbObjectError + 343, , "Excel-felvärde i importen på rad " & r & ", kolumn " & c
+        Next c
+        If r > 2 Then
+            For j = 0 To 3: sourceSums(j) = sourceSums(j) + N(sourceData(r, sh(sumFields(j)))): Next j
         End If
     Next r
-    ' Kontrollera alla import-ID innan första skrivningen.
-    For r = 2 To VLastRow(src)
-        If Len(S(src.Cells(r, sh("LITTRERING")).Value2)) > 0 Or Len(S(src.Cells(r, sh("MATERIALTYP")).Value2)) > 0 Or Len(S(src.Cells(r, sh("CLASS")).Value2)) > 0 Then
-            id = VNorm(src.Cells(r, sh("INFO-ID-REFERENS")).Value2)
+    For r = 2 To destLast
+        For c = 1 To destCols
+            If IsError(existing(r, c)) Then Err.Raise vbObjectError + 344, , "Excel-felvärde i Rådata på rad " & r & ", kolumn " & c
+        Next c
+        If r > 2 Then
+            For j = 0 To 3: destSums(j) = destSums(j) + N(existing(r, dh(sumFields(j)))): Next j
+        End If
+    Next r
+    sourceTotal = sourceLast >= 3: destTotal = destLast >= 3
+    For Each field In Array("LITTRERING", "MATERIALTYP", "CLASS")
+        If Len(S(sourceData(2, sh(field)))) > 0 Then sourceTotal = False
+        If Len(S(existing(2, dh(field)))) > 0 Then destTotal = False
+    Next field
+    For j = 0 To 3
+        If Abs(N(sourceData(2, sh(sumFields(j)))) - sourceSums(j)) > 0.00001 Then sourceTotal = False
+        If Abs(N(existing(2, dh(sumFields(j)))) - destSums(j)) > 0.00001 Then destTotal = False
+    Next j
+    For r = 2 To destLast
+        If Not (r = 2 And destTotal) Then
+            id = VNorm(existing(r, dh("INFO-ID-REFERENS")))
+            If Len(id) > 0 Then
+                If ids.Exists(id) Then Err.Raise vbObjectError + 333, , "Dubbelt ID i befintlig Rådata: " & id
+                ids.Add id, r
+            End If
+        End If
+    Next r
+    For r = 2 To sourceLast
+        blankRow = True
+        For c = 1 To sourceCols
+            If Len(S(sourceData(r, c))) > 0 Then blankRow = False
+        Next c
+        If Not blankRow And Not (r = 2 And sourceTotal) Then
+            If Len(S(sourceData(r, sh("LITTRERING")))) = 0 And Len(S(sourceData(r, sh("MATERIALTYP")))) = 0 And Len(S(sourceData(r, sh("CLASS")))) = 0 Then Err.Raise vbObjectError + 341, , "Oidentifierad importpost på rad " & r
+            id = VNorm(sourceData(r, sh("INFO-ID-REFERENS")))
             If Len(id) = 0 Then Err.Raise vbObjectError + 334, , "Importobjekt saknar ID på rad " & r
             If seen.Exists(id) Then Err.Raise vbObjectError + 335, , "Dubbelt ID i importfilen: " & id
             seen.Add id, r
         End If
     Next r
-    ' En rad utan objektidentitet får bara hoppas över om den är tom eller verifierad exporttotal.
-    For r = 2 To VLastRow(src)
-        If Len(S(src.Cells(r, sh("LITTRERING")).Value2)) = 0 And Len(S(src.Cells(r, sh("MATERIALTYP")).Value2)) = 0 And Len(S(src.Cells(r, sh("CLASS")).Value2)) = 0 Then
-            hasValues = False
-            For Each key In sh.Keys
-                If Len(S(src.Cells(r, sh(key)).Value2)) > 0 Then hasValues = True
-            Next key
-            If hasValues Then
-                sourceTotal = r = 2
-                For Each sumField In Array("INFO-ID-REFERENS", "ANTAL", "AREA", "LÄNGD")
-                    totalValue = 0
-                    For rr = 3 To VLastRow(src): totalValue = totalValue + N(src.Cells(rr, sh(sumField)).Value2): Next rr
-                    If Abs(N(src.Cells(r, sh(sumField)).Value2) - totalValue) > 0.00001 Then sourceTotal = False
-                Next sumField
-                If Not sourceTotal Then Err.Raise vbObjectError + 341, , "Oidentifierad importpost på rad " & r & ". Ingen import har skrivits."
-            End If
-        End If
-    Next r
-    Application.EnableEvents = False
-    For Each key In sh.Keys
-        If Not dh.Exists(key) Then
-            c = dest.Cells(1, dest.Columns.Count).End(xlToLeft).Column + 1
-            dest.Cells(1, c).Value2 = src.Cells(1, sh(key)).Value2
-            dh.Add key, c
-        End If
-    Next key
+    finalCols = destCols: finalLast = destLast
+    For Each field In sh.Keys
+        If Not dh.Exists(field) Then finalCols = finalCols + 1: dh.Add field, finalCols
+    Next field
+    ReDim values(1 To Application.Max(2, destLast + seen.Count), 1 To finalCols)
+    ReDim changed(1 To UBound(values, 1), 1 To finalCols)
     keep = IsYes(ThisWorkbook.Worksheets(SHEET_PREF).Range("B5").Value2)
-    Dim conflicts As Long
     For Each key In seen.Keys
         r = seen(key)
         If ids.Exists(key) Then
             target = ids(key): updated = updated + 1
         Else
-            last = last + 1: target = last: added = added + 1: ids.Add key, target
+            finalLast = finalLast + 1: target = finalLast: added = added + 1: ids.Add key, target
         End If
         For Each field In sh.Keys
-            newValue = src.Cells(r, sh(field)).Value2
-            oldValue = dest.Cells(target, dh(field)).Value2
+            c = dh(field): newValue = sourceData(r, sh(field)): oldValue = Empty
+            If target <= destLast And c <= destCols Then oldValue = existing(target, c)
             protected = InStr("|SKICK|KOMMENTAR|ANDELSPARAS|ÅTERBRUK I PROJEKT|", "|" & field & "|") > 0
             If keep And protected And Len(S(oldValue)) > 0 Then
                 If Len(S(newValue)) > 0 And VNorm(newValue) <> VNorm(oldValue) Then
                     conflicts = conflicts + 1
-                    VIssue "Importbedömning", "Varning", target, "Befintligt " & field & " behölls. Import: " & S(newValue) & "; befintligt: " & S(oldValue)
+                    VIssue "Importbedömning", "Varning", target, "ID " & key & ": " & field & " behölls. Import: " & S(newValue) & "; befintligt: " & S(oldValue)
                 End If
-            Else
-                dest.Cells(target, dh(field)).Value2 = newValue
+            ElseIf VarType(oldValue) <> VarType(newValue) Or CStr(oldValue) <> CStr(newValue) Then
+                values(target, c) = newValue: changed(target, c) = True
             End If
         Next field
     Next key
-    Dim lo As ListObject
+    If added + updated <> seen.Count Then Err.Raise vbObjectError + 345, , "Antalskontrollen för importen stämmer inte."
+    ' Håll den verifierade exporttotalen konsekvent så att den inte blir ett falskt objekt nästa gång.
+    If destTotal Then
+        For j = 0 To 3
+            c = dh(sumFields(j)): newValue = 0#
+            For r = 3 To finalLast
+                If changed(r, c) Then
+                    newValue = CDbl(newValue) + N(values(r, c))
+                ElseIf r <= destLast Then
+                    newValue = CDbl(newValue) + N(existing(r, c))
+                End If
+            Next r
+            If CDbl(newValue) <> N(existing(2, c)) Then values(2, c) = newValue: changed(2, c) = True
+        Next j
+    End If
     For Each lo In dest.ListObjects
-        If lo.Name = "tblRadata" Then lo.Resize dest.Range(dest.Cells(1, 1), dest.Cells(last, dest.Cells(1, dest.Columns.Count).End(xlToLeft).Column))
+        If lo.Name = "tblRadata" Then Set dataTable = lo
     Next lo
+    ' Behåll befintliga tabellrader även om de är tomma. Utöka högst en gång före skrivning.
+    Application.StatusBar = "Import: tabelluppdatering..."
+    If Not dataTable Is Nothing Then
+        Set finalRange = dest.Range(dest.Cells(1, 1), dest.Cells(Application.Max(finalLast, dataTable.Range.Row + dataTable.Range.Rows.Count - 1), Application.Max(finalCols, dataTable.Range.Columns.Count)))
+        If finalRange.Address <> dataTable.Range.Address Then wrote = True: dataTable.Resize finalRange
+    End If
+    For Each field In sh.Keys
+        c = dh(field)
+        If c > destCols Then wrote = True: dest.Cells(1, c).Value2 = sourceData(1, sh(field))
+    Next field
+    ' Skriv bara ändrade celler, i sammanhängande kolumnblock. Orörda formler och egna kolumner bevaras.
+    For c = 1 To finalCols
+        Application.StatusBar = "Import: skrivning, kolumn " & c & " av " & finalCols & "..."
+        r = 2
+        Do While r <= finalLast
+            If changed(r, c) Then
+                firstRow = r: textRun = VarType(values(r, c)) = vbString
+                Do While r <= finalLast
+                    If Not changed(r, c) Then Exit Do
+                    If (VarType(values(r, c)) = vbString) <> textRun Then Exit Do
+                    r = r + 1
+                Loop
+                lastRun = r - 1
+                ReDim chunk(1 To lastRun - firstRow + 1, 1 To 1)
+                For k = firstRow To lastRun: chunk(k - firstRow + 1, 1) = values(k, c): Next k
+                wrote = True
+                VImportWriteBlock dest.Cells(firstRow, c).Resize(lastRun - firstRow + 1, 1), chunk, textRun
+            Else
+                r = r + 1
+            End If
+        Loop
+    Next c
+    If vIssues.Count > 0 Then
+        Set audit = VSheet("IMPORTKONTROLL"): auditRow = VLastRow(audit) + 1
+        ReDim auditData(1 To vIssues.Count, 1 To 3): k = 0
+        For Each issue In vIssues
+            k = k + 1: auditData(k, 1) = Now: auditData(k, 2) = issue(2): auditData(k, 3) = issue(3)
+        Next issue
+        audit.Cells(auditRow, 1).Resize(k, 3).Value2 = auditData
+    End If
     book.Close False: Set book = Nothing
-    Application.EnableEvents = oldEvents
-    ' Importvarningar skrivs innan en ny rapportkörning kan ersätta kontrollistan.
-    Dim audit As Worksheet, entry As Variant, auditRow As Long
-    Set audit = VSheet("IMPORTKONTROLL")
-    auditRow = VLastRow(audit) + 1
-    For Each entry In vIssues
-        audit.Cells(auditRow, 1).Value2 = Now
-        audit.Cells(auditRow, 2).Value2 = entry(2)
-        audit.Cells(auditRow, 3).Value2 = entry(3)
-        auditRow = auditRow + 1
-    Next entry
-    MsgBox "Import klar: " & updated & " uppdaterade, " & added & " nya. " & conflicts & " bedömningsskillnader finns i IMPORTKONTROLL. Kör UppdateraRapporter.", vbInformation
-    Exit Sub
+    successful = True
+    GoTo CleanUp
 Failed:
-    Dim message As String
-    message = Err.Description
+    failure = Err.Description
+CleanUp:
+    ' Återställ alltid, även om filöppning, säkerhetskopia eller blockskrivning misslyckas.
     On Error Resume Next
     If Not book Is Nothing Then book.Close False
+    Application.StatusBar = "Import: slutberäkning och återställning..."
+    Err.Clear
+    Application.Calculation = oldCalc
+    If Err.Number <> 0 Then failure = failure & " Återställning av beräkningsläge: " & Err.Description
+    ' Återgång till automatisk beräkning räknar smutsiga formler; inget extra Calculate-anrop.
+    ' Om användaren hade manuellt läge lämnas det manuellt utan framtvingad beräkning.
+    Application.ScreenUpdating = oldScreen
     Application.EnableEvents = oldEvents
-    MsgBox "Import avbruten: " & message, vbExclamation
+    Application.StatusBar = oldStatus
+    On Error GoTo 0
+    If cancelled Then Exit Sub
+    If Len(failure) > 0 Then
+        If wrote Then failure = failure & vbCrLf & "Importen kan vara delvis skriven. Återställ vid behov från: " & backupPath
+        MsgBox "Import avbruten: " & failure, vbExclamation
+    ElseIf successful Then
+        MsgBox "Import klar: " & updated & " matchade, " & added & " nya. " & conflicts & " bedömningsskillnader finns i IMPORTKONTROLL. Kör UppdateraRapporter vid ändrad struktur.", vbInformation
+    End If
+End Sub
+
+Private Sub VImportWriteBlock(ByVal target As Range, ByRef values() As Variant, ByVal textValues As Boolean)
+    Dim fmt As Variant, formats() As Variant, i As Long, mixed As Boolean
+    Dim errorNumber As Long, errorText As String
+    On Error GoTo Failed
+    If textValues Then
+        fmt = target.NumberFormat: mixed = IsNull(fmt)
+        If mixed Then
+            ReDim formats(1 To target.Rows.Count)
+            For i = 1 To target.Rows.Count: formats(i) = target.Cells(i, 1).NumberFormat: Next i
+        End If
+        target.NumberFormat = "@"
+    End If
+    target.Value2 = values
+RestoreFormat:
+    On Error Resume Next
+    If textValues Then
+        If mixed Then
+            For i = 1 To target.Rows.Count: target.Cells(i, 1).NumberFormat = formats(i): Next i
+        Else
+            target.NumberFormat = fmt
+        End If
+    End If
+    On Error GoTo 0
+    If errorNumber <> 0 Then Err.Raise errorNumber, "VImportWriteBlock", errorText
+    Exit Sub
+Failed:
+    errorNumber = Err.Number: errorText = Err.Description
+    Resume RestoreFormat
 End Sub
 
 Private Function VImportHeaders(ByVal ws As Worksheet) As Object
@@ -1124,10 +1248,10 @@ Private Function VMatch(ByVal item As Object, ByVal n As String, ByVal r As Long
 End Function
 
 Private Function VMatches(ByVal item As Object, ByVal r As Long) As Boolean
-    Dim a As Boolean, b As Boolean, c As Boolean, local As String
+    Dim a As Boolean, b As Boolean, c As Boolean, localArea As String
     If Not IsYes(VGet(item, "Aktiv")) Then Exit Function
-    local = VGet(item, "Lokalt delområde")
-    If Len(local) > 0 And VNorm(local) <> VNorm(mRaw(r, 3)) Then Exit Function
+    localArea = VGet(item, "Lokalt delområde")
+    If Len(localArea) > 0 And VNorm(localArea) <> VNorm(mRaw(r, 3)) Then Exit Function
     If Len(VGet(item, "Fält X")) > 0 Then
         If VMatch(item, "X", r) Then Exit Function
     End If
@@ -1172,7 +1296,7 @@ End Sub
 
 Private Function VPick(ByVal entries As Collection, ByVal r As Long, ByVal outputs As Variant, Optional ByVal action As String = "") As Object
     Dim item As Variant, best As Object, bestPriority As Double, score As Double
-    Dim local As Boolean, bestLocal As Boolean, conflict As Boolean, field As Variant, equal As Boolean, allowed As Boolean
+    Dim isLocalRule As Boolean, bestLocal As Boolean, conflict As Boolean, field As Variant, equal As Boolean, allowed As Boolean
     bestPriority = -1E+300
     For Each item In entries
         If Len(action) = 0 Or VNorm(VGet(item, "Åtgärd")) = VNorm(action) Then
@@ -1184,12 +1308,12 @@ Private Function VPick(ByVal entries As Collection, ByVal r As Long, ByVal outpu
             If allowed Then
                 If VMatches(item, r) Then
                     score = CDbl(VGet(item, "Prioritet"))
-                    local = Len(VGet(item, "Lokalt delområde")) > 0
+                    isLocalRule = Len(VGet(item, "Lokalt delområde")) > 0
                     If best Is Nothing Then
-                        Set best = item: bestPriority = score: bestLocal = local: conflict = False
-                    ElseIf (local And Not bestLocal) Or (local = bestLocal And score > bestPriority) Then
-                        Set best = item: bestPriority = score: bestLocal = local: conflict = False
-                    ElseIf local = bestLocal And score = bestPriority Then
+                        Set best = item: bestPriority = score: bestLocal = isLocalRule: conflict = False
+                    ElseIf (isLocalRule And Not bestLocal) Or (isLocalRule = bestLocal And score > bestPriority) Then
+                        Set best = item: bestPriority = score: bestLocal = isLocalRule: conflict = False
+                    ElseIf isLocalRule = bestLocal And score = bestPriority Then
                         equal = True
                         For Each field In outputs
                             If VNorm(VGet(item, CStr(field))) <> VNorm(VGet(best, CStr(field))) Then equal = False
