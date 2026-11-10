@@ -177,3 +177,11 @@ behåller utrustningens ordningstal i Regler, normalt 40. Huvudrubriken
 UTRUSTNING kan därför förekomma i två avsnitt. Prioritet och mängdberäkning
 påverkas inte. Detta undantag är i koden; ändra inte hela utrustningsregeln
 till 18 om kasserad utrustning ska ligga kvar längre ned.
+
+## Separat testversion 2
+
+Se [v2/README.md](v2/README.md) för regelstyrning med tre villkor,
+Återbruk i projekt, redigerbara grupp- och enhetsregler och KONTROLL.
+V2-modulen kräver de nya tabellerna i den förberedda testarbetsboken.
+Rotens VBA-fil är den tidigare versionen och har inte ersatts.
+V2 är ännu inte kompilerad eller körd i Excel för Windows; se testrapporten.
