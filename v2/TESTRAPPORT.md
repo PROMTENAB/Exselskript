@@ -49,3 +49,10 @@ Samma fil finns under original/ i leveranspaketet. Fullständig lista över
    den filen är testdata och får inte användas som inventeringsbeslut.
 5. Kör rapportuppdateringen en andra gång och kontrollera att poster/mängder
    inte dubbleras. Jämför utfällning, bilder, mall, logotyp och utskrift.
+
+## Rättning efter Excel-reparation
+
+DataValidation låg efter pageMargins i arbetsbladets XML, i strid med
+OOXML-elementordningen. Ordningen rättades i båda testarbetsböckerna och
+byggaren. Alla arbetsblads elementordning har därefter kontrollerats.
+Ny öppning i Excel är fortfarande ej verifierad här.

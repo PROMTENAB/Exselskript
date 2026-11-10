@@ -93,6 +93,8 @@ def write_cell(sheet,r,c,value,style=None):
         cell.set('t','inlineStr');E.SubElement(E.SubElement(cell,q('is')),q('t')).text=str(value)
 
 def serialize(sheet):
+    order = ['sheetPr', 'dimension', 'sheetViews', 'sheetFormatPr', 'cols', 'sheetData', 'sheetCalcPr', 'sheetProtection', 'protectedRanges', 'scenarios', 'autoFilter', 'sortState', 'dataConsolidate', 'customSheetViews', 'mergeCells', 'phoneticPr', 'conditionalFormatting', 'dataValidations', 'hyperlinks', 'printOptions', 'pageMargins', 'pageSetup', 'headerFooter', 'rowBreaks', 'colBreaks', 'customProperties', 'cellWatches', 'ignoredErrors', 'smartTags', 'drawing', 'legacyDrawing', 'legacyDrawingHF', 'drawingHF', 'picture', 'oleObjects', 'controls', 'webPublishItems', 'tableParts', 'extLst']
+    sheet[:] = sorted(sheet, key=lambda child: order.index(E.QName(child).localname))
     sd=sheet.find(q('sheetData'))
     if sd is not None:
         sd[:]=sorted(sd,key=lambda x:int(x.get('r')))
