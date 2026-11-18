@@ -77,9 +77,9 @@ Helt tomma rader ignoreras. Saknade/dubbla ID:n och ogiltiga mängder placeras i
 KONTROLL med källrad och länk och tas inte med i mängdsummeringen. Filtrering via
 Rapportval loggas. Regeltvister stoppar körningen i stället för godtycklig vinnare.
 
-Varje rapportkörning gör en separat fullständig XLSM-säkerhetskopia innan den
-bygger om rapporterna. En dialog varnar om att egna rapportanteckningar och
-format ännu inte flyttas automatiskt. Rådata, originalregler, bildregister,
+Innan rapportbladen byggs om visar Excel en bekräftelse. Egna anteckningar
+och format på rapportbladen överförs inte. Spara en egen kopia av arbetsboken
+före uppdatering om du vill kunna återställa dem. Rådata, originalregler, bildregister,
 rapportmall och originalbilder lämnas kvar. Genererade rapportblad byggs om som
 förut. Fotolänkar fortsätter gå direkt till första filen med antal bildnamn.
 Det gamla bildregistret finns kvar men används inte av de direkta fotolänkarna.
@@ -96,8 +96,8 @@ Rapporten uppdateras med en separat knapp efter import. Importen är ej körd i 
 
 ## Återställning
 
-Stäng testfilen och öppna `original/test2.xlsm` eller en automatisk
-`Inventering_backup_*.xlsm`. Originalets SHA-256 är
+Stäng testfilen och öppna en egen sparad kopia eller `original/test2.xlsm`.
+Originalets SHA-256 är
 `8dc3b96be88e046f0d901720557ce90e70e3bb48242e7e9ea2372980e95731fe`.
 Den gamla versionen i repots rot har inte ersatts. Importera inte enbart V2-modulen
 i en gammal bok utan de nya tabellerna: använd den förberedda testarbetsboken.
@@ -108,7 +108,7 @@ i en gammal bok utan de nya tabellerna: använd den förberedda testarbetsboken.
   utskrift, logotyp och faktisk prestanda är inte verifierade i Windows.
 - Förhandsgranskning, transaktionell återställning vid körfel, automatisk
   anteckningsöverföring, egen formatering över ombyggnader och ändringshistorik
-  är uppskjutna enligt den förenklade beställningen. Säkerhetskopian är återställningsvägen.
+  är uppskjutna enligt den förenklade beställningen. Återställning kräver en tidigare sparad arbetsbok.
 - Nivå 2–3, ANDEL BEDÖMD och procentbaserad återbruksmängd är inte implementerade.
 - Regelkonflikter stoppar körningen; KONTROLL är en enkel kontrollista, inte en fullständig granskningsdialog.
 

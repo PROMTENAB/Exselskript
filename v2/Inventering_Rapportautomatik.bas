@@ -833,6 +833,11 @@ Public Sub UppdateraRapporter()
     Dim raw As Worksheet, areas As Object, names As Object, photos As Object
     Dim area As Variant, areaValue As String, name As String, generated As Long
     Dim stegTid As Double, totalTid As Double, oldEvents As Boolean
+    If ThisWorkbook.ProtectStructure Then
+        MsgBox "Arbetsbokens struktur är skyddad. Ta bort strukturskyddet innan rapportbladen byggs om.", vbExclamation
+        Exit Sub
+    End If
+    If MsgBox("Rapportbladen byggs om. Egna anteckningar och format på rapportbladen överförs inte. Fortsätt?", vbOKCancel + vbInformation) <> vbOK Then Exit Sub
     oldEvents = Application.EnableEvents
     On Error GoTo Failed
     stegTid = Timer
@@ -840,9 +845,6 @@ Public Sub UppdateraRapporter()
     Debug.Print "----- Rapportuppdatering " & Now & " -----"
     Application.StatusBar = "Rapporter: förbereder..."
     oldCalc = Application.Calculation
-    If Len(ThisWorkbook.Path) = 0 Then Err.Raise vbObjectError + 320, , "Spara testarbetsboken som XLSM innan uppdatering."
-    If MsgBox("Version 2 bygger om rapportbladen. Egna anteckningar och format finns kvar i en automatisk säkerhetskopia men överförs inte automatiskt. Fortsätt?", vbOKCancel + vbInformation) <> vbOK Then Exit Sub
-    ThisWorkbook.SaveCopyAs ThisWorkbook.Path & Application.PathSeparator & "Inventering_backup_" & Format$(Now, "yyyymmdd_hhnnss") & "_" & CLng(Timer * 10) & ".xlsm"
     Application.ScreenUpdating = False
     Application.DisplayAlerts = False
     Application.Calculation = xlCalculationManual
@@ -1533,7 +1535,22 @@ End Sub
 
 Private Sub VBuildCalc()
     Dim ws As Worksheet, data() As Variant, r As Long, i As Long, col As String, key As String
+    Dim otherSheet As Object
     Set ws = VSheet("_InventeringV2")
+    If ws.Visible <> xlSheetVeryHidden Then
+        If ThisWorkbook.ActiveSheet Is ws Then
+            For Each otherSheet In ThisWorkbook.Sheets
+                If Not (otherSheet Is ws) And otherSheet.Visible = xlSheetVisible Then
+                    otherSheet.Select True
+                    Exit For
+                End If
+            Next otherSheet
+            If ThisWorkbook.ActiveSheet Is ws Then
+                Err.Raise vbObjectError + 350, "VBuildCalc", "Visa ett annat blad i arbetsboken så att hjälpbladet kan döljas."
+            End If
+        End If
+        ws.Visible = xlSheetVeryHidden
+    End If
     ReDim data(1 To Application.Max(2, mRawLast), 1 To 8)
     data(1, 1) = "ID": data(1, 2) = "Grupp alla": data(1, 3) = "Grupp område"
     data(1, 4) = "Mängd": data(1, 5) = "Återbruk": data(1, 6) = "Regel-ID"
@@ -1568,7 +1585,6 @@ Private Sub VBuildCalc()
         ws.Range("D2:D" & i).NumberFormat = "General"
         ws.Range("D2:D" & i).Formula = quantities
     End If
-    ws.Visible = xlSheetVeryHidden
 End Sub
 
 Private Function VGroupFormula(ByVal rows As Collection, ByVal metric As String) As String

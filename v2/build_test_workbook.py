@@ -188,7 +188,7 @@ def build(src,out,source):
     readme=E.fromstring(parts[sheets['Läs mig']]);write_cell(readme,30,1,'TESTVERSION 2 – kör InstalleraKnappar, därefter UppdateraRapporter.')
     write_cell(readme,31,1,'Återbruk i projekt saknades i källfilen. Fyll JA / NEJ / EJ FASTSTÄLLT i Rådata; inga beslut har gissats.')
     write_cell(readme,32,1,'Regler V2 finns från rad 40. Rapporterna i denna fil är ännu originalets rapporter tills makrot körs.')
-    write_cell(readme,33,1,'Rapportuppdatering säkerhetskopierar hela filen. Egna rapportanteckningar överförs inte automatiskt.')
+    write_cell(readme,33,1,'Rapportbladen byggs om. Egna anteckningar och format på rapportbladen överförs inte.')
     write_cell(readme,34,1,'VBA-källkod och filstruktur kontrollerade; Excel-kompilering och full rapportkörning behöver provas i Windows.')
     readme.find(q('dimension')).set('ref','A1:G34')
     # Maintain worksheet element ordering for raw validation (must precede tableParts).
