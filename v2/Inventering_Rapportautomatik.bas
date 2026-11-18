@@ -445,14 +445,49 @@ Private Sub CategoryHeading(ByVal ws As Worksheet, ByVal rowNo As Long, _
     mFormula(rowNo, 1) = False: mOutput(rowNo, 1) = UCase$(title)
 End Sub
 
+Private Function LitteraSortKey(ByVal littera As String) As String
+    Dim pos As Long, firstDigit As Long, digits As String, ch As String, result As String
+    pos = 1
+    Do While pos <= Len(littera)
+        ch = Mid$(littera, pos, 1)
+        If ch Like "#" Then
+            firstDigit = pos
+            Do While Mid$(littera, pos, 1) Like "#"
+                pos = pos + 1
+            Loop
+            ' Jämför antal signifikanta siffror före siffrorna själva.
+            Do While firstDigit < pos - 1 And Mid$(littera, firstDigit, 1) = "0"
+                firstDigit = firstDigit + 1
+            Loop
+            digits = Mid$(littera, firstDigit, pos - firstDigit)
+            result = result & Format$(Len(digits), "00000") & digits
+        Else
+            result = result & UCase$(ch)
+            pos = pos + 1
+        End If
+    Loop
+    LitteraSortKey = result
+End Function
+
+Private Function CompareReportKeys(ByVal leftKey As Variant, ByVal rightKey As Variant) As Long
+    Dim part As Long, comparison As Long
+    For part = LBound(leftKey) To UBound(leftKey)
+        comparison = StrComp(leftKey(part), rightKey(part), vbTextCompare)
+        If comparison <> 0 Then
+            CompareReportKeys = comparison
+            Exit Function
+        End If
+    Next part
+End Function
+
 Private Sub SortKeys(ByRef arr As Variant, ByVal keyStrings As Object, _
                      ByVal first As Long, ByVal last As Long)
-    Dim i As Long, j As Long, pivot As String, temp As Variant
+    Dim i As Long, j As Long, pivot As Variant, temp As Variant
     i = first: j = last
-    pivot = CStr(keyStrings(arr((first + last) \ 2)))
+    pivot = keyStrings(arr((first + last) \ 2))
     Do While i <= j
-        Do While StrComp(CStr(keyStrings(arr(i))), pivot, vbTextCompare) < 0: i = i + 1: Loop
-        Do While StrComp(CStr(keyStrings(arr(j))), pivot, vbTextCompare) > 0: j = j - 1: Loop
+        Do While CompareReportKeys(keyStrings(arr(i)), pivot) < 0: i = i + 1: Loop
+        Do While CompareReportKeys(keyStrings(arr(j)), pivot) > 0: j = j - 1: Loop
         If i <= j Then
             temp = arr(i): arr(i) = arr(j): arr(j) = temp
             i = i + 1: j = j - 1
@@ -683,8 +718,8 @@ Private Sub RenderReport(ByVal outputSheet As Worksheet, ByVal areaFilter As Str
                     saved.Add groupKey, 0#
                     missing.Add groupKey, 0&
                     meta.Add groupKey, Array(CStr(rule(0)), CStr(rule(1)), CStr(rule(2)), lit, mat, unit, condition, area)
-                    sortValues.Add groupKey, HeadingSortKey(rule) & UCase$(lit) & "|" & _
-                       UCase$(mat) & "|" & UCase$(area) & "|" & groupKey
+                    sortValues.Add groupKey, Array(HeadingSortKey(rule), LitteraSortKey(lit), _
+                       UCase$(lit), UCase$(mat) & "|" & UCase$(area) & "|" & groupKey)
                 End If
                 Set rows = groups(groupKey)
                 rows.Add i
